@@ -10,6 +10,23 @@ function sanitizeFileName(name: string) {
     .trim();
 }
 
+function getErrorMessage(details: unknown): string {
+  if (!details || typeof details !== "object") {
+    return "Failed to fetch question paper";
+  }
+
+  const typed = details as Record<string, unknown>;
+  if (typeof typed.message === "string" && typed.message.trim()) {
+    return typed.message;
+  }
+
+  if (typeof typed.error === "string" && typed.error.trim()) {
+    return typed.error;
+  }
+
+  return "Failed to fetch question paper";
+}
+
 export async function GET(request: NextRequest) {
   const paperId = request.nextUrl.searchParams.get("paperId");
 
@@ -23,11 +40,12 @@ export async function GET(request: NextRequest) {
   const result = await getQuestionPaperRaw(paperId);
 
   if (!result.success) {
+    const details = result.body;
     return NextResponse.json(
       {
         success: false,
-        message: "Failed to fetch question paper",
-        details: result.body,
+        message: getErrorMessage(details),
+        details,
       },
       { status: result.status || 500 },
     );

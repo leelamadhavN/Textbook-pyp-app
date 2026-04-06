@@ -205,6 +205,11 @@ export default function Home() {
   };
 
   const handleDownload = async (paper: Paper) => {
+    if (!paper.id) {
+      setError("This paper does not have a valid test ID for download.");
+      return;
+    }
+
     setDownloadingPaperId(paper.id);
     setError("");
 
@@ -214,7 +219,10 @@ export default function Home() {
       });
 
       if (!response.ok) {
-        throw new Error("Excel download failed");
+        const errorBody = (await response.json().catch(() => ({}))) as {
+          message?: string;
+        };
+        throw new Error(errorBody.message || "Excel download failed");
       }
 
       const blob = await response.blob();

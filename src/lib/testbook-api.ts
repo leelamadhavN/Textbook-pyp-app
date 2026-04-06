@@ -87,5 +87,24 @@ export async function getQuestionPaperRaw(paperId: string) {
   });
 
   const url = `https://api-new.testbook.com/api/v2/tests/${encodedId}?${params.toString()}`;
-  return fetchJson(url);
+
+  const attempts = 3;
+  let lastResult: ApiResult | null = null;
+
+  for (let i = 0; i < attempts; i += 1) {
+    const result = await fetchJson(url);
+    lastResult = result;
+
+    if (result.success) {
+      return result;
+    }
+  }
+
+  return (
+    lastResult ?? {
+      success: false,
+      status: 500,
+      body: { success: false, message: "Unable to fetch question paper" },
+    }
+  );
 }
