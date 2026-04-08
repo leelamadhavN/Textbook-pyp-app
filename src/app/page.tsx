@@ -49,6 +49,27 @@ function formatDate(dateText: string): string {
   return date.toLocaleString();
 }
 
+function getCsvFileNameFromHeaders(contentDisposition: string | null, fallback: string): string {
+  if (contentDisposition) {
+    const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+    if (utf8Match?.[1]) {
+      const decoded = decodeURIComponent(utf8Match[1]);
+      return decoded.toLowerCase().endsWith(".csv") ? decoded : `${decoded}.csv`;
+    }
+
+    const basicMatch = contentDisposition.match(/filename="?([^";]+)"?/i);
+    if (basicMatch?.[1]) {
+      const value = basicMatch[1].trim();
+      return value.toLowerCase().endsWith(".csv") ? value : `${value}.csv`;
+    }
+  }
+
+  const safeFallback = fallback || "question-paper";
+  return safeFallback.toLowerCase().endsWith(".csv")
+    ? safeFallback
+    : `${safeFallback}.csv`;
+}
+
 async function getPapersPage(examId: string, year: string, page: number) {
   const start = (page - 1) * PAGE_LIMIT;
   const url = `/api/papers?examId=${encodeURIComponent(examId)}&start=${start}&limit=${PAGE_LIMIT}&year=${encodeURIComponent(year)}`;
@@ -241,7 +262,11 @@ export default function Home() {
       const blobUrl = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = blobUrl;
-      link.download = `${paper.title || "question-paper"}.csv`;
+      const contentDisposition = response.headers.get("content-disposition");
+      link.download = getCsvFileNameFromHeaders(
+        contentDisposition,
+        `${paper.title || "question-paper"}.csv`,
+      );
       document.body.appendChild(link);
       link.click();
       link.remove();
