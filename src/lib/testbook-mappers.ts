@@ -44,6 +44,8 @@ export type AnswerByQuestionId = Record<
 
 type AnyObject = Record<string, unknown>;
 
+const EXCEL_CELL_CHAR_LIMIT = 32767;
+
 function getString(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
@@ -63,6 +65,12 @@ function stripHtml(input: string): string {
     .replace(/&gt;/g, ">")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function clampExcelText(input: string): string {
+  if (!input) return "";
+  if (input.length <= EXCEL_CELL_CHAR_LIMIT) return input;
+  return input.slice(0, EXCEL_CELL_CHAR_LIMIT - 3) + "...";
 }
 
 function isNonPreviousYearTitle(title: string): boolean {
@@ -136,7 +144,7 @@ export function mapAnswerLookup(payload: AnyObject): AnswerByQuestionId {
 
     lookup[questionId] = {
       correctOption: normalizeCorrectOption(answerObj.correctOption),
-      solutionText: solutionTextFromSol || valText,
+      solutionText: clampExcelText(solutionTextFromSol || valText),
     };
   }
 
@@ -239,14 +247,14 @@ export function mapExportRows(
 
       rows.push({
         question_number: index,
-        question_text: stripHtml(getString(en.value)),
-        option_a: stripHtml(optA),
-        option_b: stripHtml(optB),
-        option_c: stripHtml(optC),
-        option_d: stripHtml(optD),
+        question_text: clampExcelText(stripHtml(getString(en.value))),
+        option_a: clampExcelText(stripHtml(optA)),
+        option_b: clampExcelText(stripHtml(optB)),
+        option_c: clampExcelText(stripHtml(optC)),
+        option_d: clampExcelText(stripHtml(optD)),
         correct_option:
           answerInfo?.correctOption || extractCorrectOption(question),
-        solution_text: answerInfo?.solutionText || "",
+        solution_text: clampExcelText(answerInfo?.solutionText || ""),
         difficulty: "",
         marks,
         negative_marks: negMarksRaw > 0 ? negMarksRaw : "",
