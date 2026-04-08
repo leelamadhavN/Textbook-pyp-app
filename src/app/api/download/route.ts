@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as XLSX from "xlsx";
-import { getQuestionPaperRaw } from "@/lib/testbook-api";
-import { getPaperTitle, mapExportRows } from "@/lib/testbook-mappers";
+import { getQuestionAnswersRaw, getQuestionPaperRaw } from "@/lib/testbook-api";
+import { getPaperTitle, mapAnswerLookup, mapExportRows } from "@/lib/testbook-mappers";
 
 function sanitizeFileName(name: string) {
   return name
@@ -25,6 +25,23 @@ function getErrorMessage(details: unknown): string {
   }
 
   return "Failed to fetch question paper";
+}
+
+function countQuestions(payload: Record<string, unknown>): number {
+  const data = (payload.data as Record<string, unknown>) ?? {};
+  const sections = Array.isArray(data.sections)
+    ? (data.sections as Array<Record<string, unknown>>)
+    : [];
+
+  let count = 0;
+  for (const section of sections) {
+    const questions = Array.isArray(section.questions)
+      ? (section.questions as Array<unknown>)
+      : [];
+    count += questions.length;
+  }
+
+  return count;
 }
 
 export async function GET(request: NextRequest) {
@@ -52,7 +69,23 @@ export async function GET(request: NextRequest) {
   }
 
   const payload = result.body as Record<string, unknown>;
-  const rows = mapExportRows(payload);
+  const answersResult = await getQuestionAnswersRaw(paperId);
+  const answersAvailable = answersResult.success;
+  const answersMessage = answersAvailable
+    ? "Answers loaded"
+    : getErrorMessage(answersResult.body);
+
+  const answersLookup = answersResult.success
+    ? mapAnswerLookup(answersResult.body as Record<string, unknown>)
+    : {};
+
+  const questionCount = countQuestions(payload);
+  const answersCount = Object.keys(answersLookup).length;
+  console.info(
+    `[download] paperId=${paperId} questionCount=${questionCount} answersAvailable=${answersAvailable} answersCount=${answersCount} message=${answersMessage}`,
+  );
+
+  const rows = mapExportRows(payload, answersLookup);
 
   const workbook = XLSX.utils.book_new();
   const worksheet = XLSX.utils.json_to_sheet(rows, {
@@ -73,6 +106,13 @@ export async function GET(request: NextRequest) {
 
   XLSX.utils.book_append_sheet(workbook, worksheet, "Questions");
 
+  const infoSheet = XLSX.utils.json_to_sheet([
+    { key: "paper_id", value: paperId },
+    { key: "answers_available", value: answersAvailable ? "true" : "false" },
+    { key: "answers_message", value: answersMessage },
+  ]);
+  XLSX.utils.book_append_sheet(workbook, infoSheet, "Info");
+
   const buffer = XLSX.write(workbook, {
     type: "buffer",
     bookType: "xlsx",
@@ -88,6 +128,8 @@ export async function GET(request: NextRequest) {
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       "Content-Disposition": `attachment; filename="${safeName}.xlsx"`,
       "Cache-Control": "no-store",
+      "X-Answers-Available": answersAvailable ? "true" : "false",
+      "X-Answers-Message": encodeURIComponent(answersMessage),
     },
   });
 }

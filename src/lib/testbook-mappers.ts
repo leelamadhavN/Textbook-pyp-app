@@ -34,6 +34,14 @@ export type ExportRow = {
   negative_marks: number | string;
 };
 
+export type AnswerByQuestionId = Record<
+  string,
+  {
+    correctOption: string;
+    solutionText: string;
+  }
+>;
+
 type AnyObject = Record<string, unknown>;
 
 function getString(value: unknown): string {
@@ -113,6 +121,28 @@ function extractCorrectOption(question: AnyObject): string {
   );
 }
 
+export function mapAnswerLookup(payload: AnyObject): AnswerByQuestionId {
+  const data = (payload.data ?? {}) as AnyObject;
+  const lookup: AnswerByQuestionId = {};
+
+  for (const [questionId, answerValue] of Object.entries(data)) {
+    if (!questionId || !answerValue || typeof answerValue !== "object") continue;
+
+    const answerObj = answerValue as AnyObject;
+    const solutionObj = (answerObj.sol ?? {}) as AnyObject;
+    const solutionEn = (solutionObj.en ?? {}) as AnyObject;
+    const valText = stripHtml(getString(answerObj.val));
+    const solutionTextFromSol = stripHtml(getString(solutionEn.value));
+
+    lookup[questionId] = {
+      correctOption: normalizeCorrectOption(answerObj.correctOption),
+      solutionText: solutionTextFromSol || valText,
+    };
+  }
+
+  return lookup;
+}
+
 export function mapSuperGroups(payload: AnyObject): SuperGroup[] {
   const groups = ((payload.data as AnyObject)?.superGroup ?? []) as AnyObject[];
   if (!Array.isArray(groups)) return [];
@@ -179,7 +209,10 @@ export function getPaperTitle(payload: AnyObject): string {
   return getString(((payload.data as AnyObject) ?? {}).title) || "question-paper";
 }
 
-export function mapExportRows(payload: AnyObject): ExportRow[] {
+export function mapExportRows(
+  payload: AnyObject,
+  answersLookup: AnswerByQuestionId = {},
+): ExportRow[] {
   const sections = ((payload.data as AnyObject)?.sections ?? []) as AnyObject[];
   if (!Array.isArray(sections)) return [];
 
@@ -193,6 +226,8 @@ export function mapExportRows(payload: AnyObject): ExportRow[] {
     for (const question of questions) {
       const en = (question.en ?? {}) as AnyObject;
       const options = (en.options ?? []) as AnyObject[];
+      const questionId = getString(question._id);
+      const answerInfo = answersLookup[questionId];
 
       const optA = getString((options[0] ?? {}).value);
       const optB = getString((options[1] ?? {}).value);
@@ -209,8 +244,9 @@ export function mapExportRows(payload: AnyObject): ExportRow[] {
         option_b: stripHtml(optB),
         option_c: stripHtml(optC),
         option_d: stripHtml(optD),
-        correct_option: extractCorrectOption(question),
-        solution_text: "",
+        correct_option:
+          answerInfo?.correctOption || extractCorrectOption(question),
+        solution_text: answerInfo?.solutionText || "",
         difficulty: "",
         marks,
         negative_marks: negMarksRaw > 0 ? negMarksRaw : "",

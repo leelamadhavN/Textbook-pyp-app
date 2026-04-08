@@ -225,6 +225,18 @@ export default function Home() {
         throw new Error(errorBody.message || "Excel download failed");
       }
 
+      const answersAvailable = response.headers.get("X-Answers-Available");
+      const answersMessageEncoded = response.headers.get("X-Answers-Message");
+      const answersMessage = answersMessageEncoded
+        ? decodeURIComponent(answersMessageEncoded)
+        : "Answers unavailable from upstream API";
+
+      if (answersAvailable === "false") {
+        setError(
+          `Downloaded without answers: ${answersMessage}. So correct_option and solution_text may be blank.`,
+        );
+      }
+
       const blob = await response.blob();
       const blobUrl = URL.createObjectURL(blob);
       const link = document.createElement("a");

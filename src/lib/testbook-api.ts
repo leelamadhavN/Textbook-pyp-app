@@ -28,7 +28,13 @@ async function fetchJson(url: string): Promise<ApiResult> {
     parsed = { success: false, message: "Invalid JSON response", raw: text };
   }
 
-  if (!response.ok) {
+  const bodyIndicatesFailure =
+    parsed &&
+    typeof parsed === "object" &&
+    "success" in parsed &&
+    (parsed as { success?: boolean }).success === false;
+
+  if (!response.ok || bodyIndicatesFailure) {
     return {
       success: false,
       status: response.status,
@@ -105,6 +111,37 @@ export async function getQuestionPaperRaw(paperId: string) {
       success: false,
       status: 500,
       body: { success: false, message: "Unable to fetch question paper" },
+    }
+  );
+}
+
+export async function getQuestionAnswersRaw(paperId: string) {
+  const encodedId = encodeURIComponent(paperId);
+  const params = new URLSearchParams({
+    auth_code: API4_AUTH_CODE,
+    "X-Tb-Client": "web,1.2",
+    language: "English",
+  });
+
+  const url = `https://api-new.testbook.com/api/v2/tests/${encodedId}/answers?${params.toString()}`;
+
+  const attempts = 3;
+  let lastResult: ApiResult | null = null;
+
+  for (let i = 0; i < attempts; i += 1) {
+    const result = await fetchJson(url);
+    lastResult = result;
+
+    if (result.success) {
+      return result;
+    }
+  }
+
+  return (
+    lastResult ?? {
+      success: false,
+      status: 500,
+      body: { success: false, message: "Unable to fetch question answers" },
     }
   );
 }
