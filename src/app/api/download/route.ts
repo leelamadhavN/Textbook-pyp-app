@@ -84,7 +84,8 @@ function toCsv(rows: ReturnType<typeof mapExportRows>): string {
     lines.push(values.map(csvEscape).join(","));
   }
 
-  return lines.join("\n");
+  // BOM + sep line improves CSV delimiter detection in Excel on Windows locales.
+  return `\uFEFFsep=,\r\n${lines.join("\r\n")}`;
 }
 
 export async function GET(request: NextRequest) {
