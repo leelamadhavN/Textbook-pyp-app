@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import * as XLSX from "xlsx";
 import { getQuestionAnswersRaw, getQuestionPaperRaw } from "@/lib/testbook-api";
 import { getPaperTitle, mapAnswerLookup, mapExportRows } from "@/lib/testbook-mappers";
 
@@ -44,6 +43,50 @@ function countQuestions(payload: Record<string, unknown>): number {
   return count;
 }
 
+function csvEscape(value: string | number): string {
+  const text = String(value ?? "");
+  const escaped = text.replace(/"/g, '""');
+  return `"${escaped}"`;
+}
+
+function toCsv(rows: ReturnType<typeof mapExportRows>): string {
+  const headers = [
+    "question_number",
+    "question_text",
+    "option_a",
+    "option_b",
+    "option_c",
+    "option_d",
+    "correct_option",
+    "solution_text",
+    "difficulty",
+    "marks",
+    "negative_marks",
+  ];
+
+  const lines: string[] = [headers.map(csvEscape).join(",")];
+
+  for (const row of rows) {
+    const values = [
+      row.question_number,
+      row.question_text,
+      row.option_a,
+      row.option_b,
+      row.option_c,
+      row.option_d,
+      row.correct_option,
+      row.solution_text,
+      row.difficulty,
+      row.marks,
+      row.negative_marks,
+    ];
+
+    lines.push(values.map(csvEscape).join(","));
+  }
+
+  return lines.join("\n");
+}
+
 export async function GET(request: NextRequest) {
   const paperId = request.nextUrl.searchParams.get("paperId");
 
@@ -86,47 +129,16 @@ export async function GET(request: NextRequest) {
   );
 
   const rows = mapExportRows(payload, answersLookup);
-
-  const workbook = XLSX.utils.book_new();
-  const worksheet = XLSX.utils.json_to_sheet(rows, {
-    header: [
-      "question_number",
-      "question_text",
-      "option_a",
-      "option_b",
-      "option_c",
-      "option_d",
-      "correct_option",
-      "solution_text",
-      "difficulty",
-      "marks",
-      "negative_marks",
-    ],
-  });
-
-  XLSX.utils.book_append_sheet(workbook, worksheet, "Questions");
-
-  const infoSheet = XLSX.utils.json_to_sheet([
-    { key: "paper_id", value: paperId },
-    { key: "answers_available", value: answersAvailable ? "true" : "false" },
-    { key: "answers_message", value: answersMessage },
-  ]);
-  XLSX.utils.book_append_sheet(workbook, infoSheet, "Info");
-
-  const buffer = XLSX.write(workbook, {
-    type: "buffer",
-    bookType: "xlsx",
-  });
+  const csv = toCsv(rows);
 
   const nameFromApi = getPaperTitle(payload);
   const safeName = sanitizeFileName(nameFromApi || "question-paper");
 
-  return new NextResponse(buffer, {
+  return new NextResponse(csv, {
     status: 200,
     headers: {
-      "Content-Type":
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      "Content-Disposition": `attachment; filename="${safeName}.xlsx"`,
+      "Content-Type": "text/csv; charset=utf-8",
+      "Content-Disposition": `attachment; filename="${safeName}.csv"`,
       "Cache-Control": "no-store",
       "X-Answers-Available": answersAvailable ? "true" : "false",
       "X-Answers-Message": encodeURIComponent(answersMessage),

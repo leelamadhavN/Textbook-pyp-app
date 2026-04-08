@@ -222,7 +222,7 @@ export default function Home() {
         const errorBody = (await response.json().catch(() => ({}))) as {
           message?: string;
         };
-        throw new Error(errorBody.message || "Excel download failed");
+        throw new Error(errorBody.message || "CSV download failed");
       }
 
       const answersAvailable = response.headers.get("X-Answers-Available");
@@ -241,7 +241,7 @@ export default function Home() {
       const blobUrl = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = blobUrl;
-      link.download = `${paper.title || "question-paper"}.xlsx`;
+      link.download = `${paper.title || "question-paper"}.csv`;
       document.body.appendChild(link);
       link.click();
       link.remove();
