@@ -39,6 +39,7 @@ export type AnswerByQuestionId = Record<
   {
     correctOption: string;
     solutionText: string;
+    negativeMarks: number | null;
   }
 >;
 
@@ -52,6 +53,21 @@ function getString(value: unknown): string {
 
 function getNumber(value: unknown, fallback = 0): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function getFiniteNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const normalized = value.trim();
+    if (!normalized) return null;
+    const parsed = Number(normalized);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  return null;
 }
 
 function stripHtml(input: string): string {
@@ -117,16 +133,49 @@ function normalizeCorrectOption(raw: unknown): string {
   return "";
 }
 
-function extractCorrectOption(question: AnyObject): string {
-  return normalizeCorrectOption(
-    question.correctOption ??
-      question.correctAns ??
-      question.correctAnswer ??
-      question.answer ??
-      question.answers ??
-      question.key ??
-      question.ans,
+function normalizeMultiCorrectOptions(raw: unknown): string {
+  if (!Array.isArray(raw) || raw.length === 0) return "";
+
+  const normalized = raw
+    .map((item) => normalizeCorrectOption(item))
+    .filter((item) => Boolean(item));
+
+  if (normalized.length === 0) return "";
+
+  return [...new Set(normalized)].join("|");
+}
+
+function normalizeRangeAnswer(raw: unknown): string {
+  if (!raw || typeof raw !== "object") return "";
+
+  const range = raw as AnyObject;
+  const start = getString(range.start).trim();
+  const end = getString(range.end).trim();
+
+  if (!start && !end) return "";
+  if (start && end && start === end) return start;
+  if (start && end) return `${start} to ${end}`;
+  return start || end;
+}
+
+function extractCorrectAnswerValue(source: AnyObject): string {
+  return (
+    normalizeCorrectOption(
+      source.correctOption ??
+        source.correctAns ??
+        source.correctAnswer ??
+        source.answer ??
+        source.answers ??
+        source.key ??
+        source.ans,
+    ) ||
+    normalizeMultiCorrectOptions(source.multiCorrectOptions) ||
+    normalizeRangeAnswer(source.range)
   );
+}
+
+function extractCorrectOption(question: AnyObject): string {
+  return extractCorrectAnswerValue(question);
 }
 
 export function mapAnswerLookup(payload: AnyObject): AnswerByQuestionId {
@@ -143,8 +192,12 @@ export function mapAnswerLookup(payload: AnyObject): AnswerByQuestionId {
     const solutionTextFromSol = stripHtml(getString(solutionEn.value));
 
     lookup[questionId] = {
-      correctOption: normalizeCorrectOption(answerObj.correctOption),
+      correctOption: extractCorrectAnswerValue(answerObj),
       solutionText: clampExcelText(solutionTextFromSol || valText),
+      negativeMarks:
+        getFiniteNumber(answerObj.negMarks) ??
+        getFiniteNumber(answerObj.negativeMarks) ??
+        getFiniteNumber(answerObj.minusMarks),
     };
   }
 
@@ -243,7 +296,12 @@ export function mapExportRows(
       const optD = getString((options[3] ?? {}).value);
 
       const marks = getNumber(question.posMarks);
-      const negMarksRaw = getNumber(question.negMarks);
+      const negMarksRaw =
+        getFiniteNumber(question.negMarks) ??
+        getFiniteNumber(question.negativeMarks) ??
+        getFiniteNumber(question.minusMarks) ??
+        answerInfo?.negativeMarks ??
+        null;
 
       rows.push({
         question_number: index,
@@ -257,7 +315,7 @@ export function mapExportRows(
         solution_text: clampExcelText(answerInfo?.solutionText || ""),
         difficulty: "",
         marks,
-        negative_marks: negMarksRaw > 0 ? negMarksRaw : "",
+        negative_marks: negMarksRaw ?? "",
       });
 
       index += 1;
