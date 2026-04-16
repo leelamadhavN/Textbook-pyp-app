@@ -29,6 +29,10 @@ export type ExportRow = {
   option_d: string;
   correct_option: string;
   solution_text: string;
+  topic: string;
+  topic_subject: string;
+  topic_category: string;
+  topic_type: string;
   difficulty: string;
   marks: number | string;
   negative_marks: number | string;
@@ -40,6 +44,10 @@ export type AnswerByQuestionId = Record<
     correctOption: string;
     solutionText: string;
     negativeMarks: number | null;
+    topic: string;
+    topicSubject: string;
+    topicCategory: string;
+    topicType: string;
   }
 >;
 
@@ -174,6 +182,32 @@ function extractCorrectAnswerValue(source: AnyObject): string {
   );
 }
 
+function extractTopicInfo(source: AnyObject): {
+  topic: string;
+  topicSubject: string;
+  topicCategory: string;
+  topicType: string;
+} {
+  const tags = Array.isArray(source.tags) ? (source.tags as unknown[]) : [];
+  const firstTag = getString(tags[0]).trim();
+
+  const globalConcept = Array.isArray(source.globalConcept)
+    ? (source.globalConcept as AnyObject[])
+    : [];
+  const firstConcept = (globalConcept[0] ?? {}) as AnyObject;
+
+  const subject = getString(((firstConcept.s ?? {}) as AnyObject).title).trim();
+  const category = getString(((firstConcept.c ?? {}) as AnyObject).title).trim();
+  const type = getString(((firstConcept.t ?? {}) as AnyObject).title).trim();
+
+  return {
+    topic: type || firstTag,
+    topicSubject: subject,
+    topicCategory: category,
+    topicType: type,
+  };
+}
+
 function extractCorrectOption(question: AnyObject): string {
   return extractCorrectAnswerValue(question);
 }
@@ -190,6 +224,7 @@ export function mapAnswerLookup(payload: AnyObject): AnswerByQuestionId {
     const solutionEn = (solutionObj.en ?? {}) as AnyObject;
     const valText = stripHtml(getString(answerObj.val));
     const solutionTextFromSol = stripHtml(getString(solutionEn.value));
+      const topicInfo = extractTopicInfo(answerObj);
 
     lookup[questionId] = {
       correctOption: extractCorrectAnswerValue(answerObj),
@@ -198,6 +233,10 @@ export function mapAnswerLookup(payload: AnyObject): AnswerByQuestionId {
         getFiniteNumber(answerObj.negMarks) ??
         getFiniteNumber(answerObj.negativeMarks) ??
         getFiniteNumber(answerObj.minusMarks),
+        topic: topicInfo.topic,
+        topicSubject: topicInfo.topicSubject,
+        topicCategory: topicInfo.topicCategory,
+        topicType: topicInfo.topicType,
     };
   }
 
@@ -313,6 +352,10 @@ export function mapExportRows(
         correct_option:
           answerInfo?.correctOption || extractCorrectOption(question),
         solution_text: clampExcelText(answerInfo?.solutionText || ""),
+        topic: answerInfo?.topic || "",
+        topic_subject: answerInfo?.topicSubject || "",
+        topic_category: answerInfo?.topicCategory || "",
+        topic_type: answerInfo?.topicType || "",
         difficulty: "",
         marks,
         negative_marks: negMarksRaw ?? "",
