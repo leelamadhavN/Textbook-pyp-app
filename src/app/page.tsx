@@ -3,9 +3,42 @@
 import { useEffect, useMemo, useState } from "react";
 import styles from "./page.module.css";
 import type { Paper, Role, SuperGroup } from "@/lib/testbook-mappers";
+import type { JwtInfo } from "@/lib/testbook-api";
+
+const AUTH_TOKEN_KEY = "tb_auth_token";
 
 const PAGE_LIMIT = 5;
 const YEAR_PAGE_SIZE = 5;
+
+function parseJwtInfoClient(token: string): JwtInfo {
+  const empty: JwtInfo = { name: "", email: "", expiresAt: null, isExpired: true, isValid: false };
+  if (!token) return empty;
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return empty;
+    const raw = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const decoded = JSON.parse(atob(raw)) as Record<string, unknown>;
+    const exp = decoded.exp;
+    let expiresAt: string | null = null;
+    let isExpired = true;
+    if (exp) {
+      const d = typeof exp === "string" ? new Date(exp) : new Date((exp as number) * 1000);
+      if (!Number.isNaN(d.getTime())) {
+        expiresAt = d.toISOString();
+        isExpired = d < new Date();
+      }
+    }
+    return {
+      name: typeof decoded.name === "string" ? decoded.name : "",
+      email: typeof decoded.email === "string" ? decoded.email : "",
+      expiresAt,
+      isExpired,
+      isValid: true,
+    };
+  } catch {
+    return empty;
+  }
+}
 
 type ApiResponse<T> = {
   success: boolean;
@@ -103,6 +136,31 @@ export default function Home() {
   const [downloadingPaperId, setDownloadingPaperId] = useState("");
 
   const [error, setError] = useState("");
+
+  const [authToken, setAuthToken] = useState("");
+  const [authTokenInput, setAuthTokenInput] = useState("");
+  const [tokenPanelOpen, setTokenPanelOpen] = useState(false);
+
+  useEffect(() => {
+    const saved = localStorage.getItem(AUTH_TOKEN_KEY) ?? "";
+    setAuthToken(saved);
+    setAuthTokenInput(saved);
+    if (!saved) setTokenPanelOpen(true);
+  }, []);
+
+  const tokenInfo = useMemo(() => parseJwtInfoClient(authToken), [authToken]);
+
+  const handleSaveToken = () => {
+    const trimmed = authTokenInput.trim();
+    setAuthToken(trimmed);
+    localStorage.setItem(AUTH_TOKEN_KEY, trimmed);
+  };
+
+  const handleClearToken = () => {
+    setAuthToken("");
+    setAuthTokenInput("");
+    localStorage.removeItem(AUTH_TOKEN_KEY);
+  };
 
   useEffect(() => {
     const load = async () => {
@@ -235,8 +293,12 @@ export default function Home() {
     setError("");
 
     try {
+      const headers: Record<string, string> = {};
+      if (authToken) headers["x-auth-token"] = authToken;
+
       const response = await fetch(`/api/download?paperId=${paper.id}`, {
         method: "GET",
+        headers,
       });
 
       if (!response.ok) {
@@ -285,6 +347,74 @@ export default function Home() {
         <p className={styles.subtitle}>
           Super Group → Role → Year Paper → Download Excel question sheet
         </p>
+
+        <section className={styles.tokenPanel}>
+          <button
+            type="button"
+            className={styles.tokenPanelToggle}
+            onClick={() => setTokenPanelOpen((o) => !o)}
+          >
+            <span>
+              Auth Token
+              {tokenInfo.isValid && !tokenInfo.isExpired && (
+                <span className={styles.tokenBadgeOk}>Active — {tokenInfo.name || tokenInfo.email}</span>
+              )}
+              {tokenInfo.isValid && tokenInfo.isExpired && (
+                <span className={styles.tokenBadgeExp}>Expired</span>
+              )}
+              {!authToken && (
+                <span className={styles.tokenBadgeMissing}>Not set — required for download</span>
+              )}
+            </span>
+            <span>{tokenPanelOpen ? "▲" : "▼"}</span>
+          </button>
+
+          {tokenPanelOpen && (
+            <div className={styles.tokenBody}>
+              <p className={styles.tokenHint}>
+                <strong>How to get your auth_code:</strong> Log in to{" "}
+                <strong>testbook.com</strong>, open DevTools (F12) → Network tab, filter by{" "}
+                <code>api-new.testbook.com</code>, click any request, and copy the{" "}
+                <code>auth_code</code> query parameter value. Paste it below.
+              </p>
+
+              {tokenInfo.isValid && tokenInfo.isExpired && tokenInfo.expiresAt && (
+                <p className={styles.tokenExpiredMsg}>
+                  Current token expired on {new Date(tokenInfo.expiresAt).toLocaleString()}. Please refresh it.
+                </p>
+              )}
+
+              <textarea
+                className={styles.tokenInput}
+                value={authTokenInput}
+                onChange={(e) => setAuthTokenInput(e.target.value)}
+                placeholder="Paste your Testbook auth_code JWT here..."
+                rows={3}
+                spellCheck={false}
+              />
+
+              <div className={styles.tokenActions}>
+                <button
+                  type="button"
+                  className={styles.tokenSaveBtn}
+                  onClick={handleSaveToken}
+                  disabled={!authTokenInput.trim()}
+                >
+                  Save Token
+                </button>
+                {authToken && (
+                  <button
+                    type="button"
+                    className={styles.tokenClearBtn}
+                    onClick={handleClearToken}
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+        </section>
 
         <section className={styles.controls}>
           <label className={styles.label}>

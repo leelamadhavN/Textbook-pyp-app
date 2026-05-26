@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getQuestionAnswersRaw, getQuestionPaperRaw } from "@/lib/testbook-api";
+import { getQuestionAnswersRaw, getQuestionPaperRaw, getServerAuthCode, parseJwtInfo } from "@/lib/testbook-api";
 import { getPaperTitle, mapAnswerLookup, mapExportRows } from "@/lib/testbook-mappers";
 
 function sanitizeFileName(name: string) {
@@ -106,7 +106,21 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const result = await getQuestionPaperRaw(paperId);
+  const authCode = getServerAuthCode(request.headers.get("x-auth-token"));
+
+  const jwtInfo = parseJwtInfo(authCode);
+  if (jwtInfo.isExpired) {
+    const expiredAt = jwtInfo.expiresAt ? new Date(jwtInfo.expiresAt).toLocaleString() : "unknown";
+    return NextResponse.json(
+      {
+        success: false,
+        message: `Auth token expired on ${expiredAt}. Please paste a fresh auth_code in the Auth Token panel — open testbook.com, DevTools → Network, filter "api-new.testbook.com", copy the "auth_code" query param.`,
+      },
+      { status: 401 },
+    );
+  }
+
+  const result = await getQuestionPaperRaw(paperId, authCode);
 
   if (!result.success) {
     const details = result.body;
@@ -121,7 +135,7 @@ export async function GET(request: NextRequest) {
   }
 
   const payload = result.body as Record<string, unknown>;
-  const answersResult = await getQuestionAnswersRaw(paperId);
+  const answersResult = await getQuestionAnswersRaw(paperId, authCode);
   const answersAvailable = answersResult.success;
   const answersMessage = answersAvailable
     ? "Answers loaded"

@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getQuestionAnswersRaw } from "@/lib/testbook-api";
+import { getQuestionAnswersRaw, getServerAuthCode, parseJwtInfo } from "@/lib/testbook-api";
 import { mapAnswerLookup } from "@/lib/testbook-mappers";
-
 
 export async function GET(request: NextRequest) {
   const paperId = request.nextUrl.searchParams.get("paperId");
@@ -13,7 +12,17 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const result = await getQuestionAnswersRaw(paperId);
+  const authCode = getServerAuthCode(request.headers.get("x-auth-token"));
+
+  const jwtInfo = parseJwtInfo(authCode);
+  if (jwtInfo.isExpired) {
+    return NextResponse.json(
+      { success: false, message: "Auth token is expired. Please refresh it in the Auth Token panel." },
+      { status: 401 },
+    );
+  }
+
+  const result = await getQuestionAnswersRaw(paperId, authCode);
 
   if (!result.success) {
     return NextResponse.json(
