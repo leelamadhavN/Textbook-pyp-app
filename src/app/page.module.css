@@ -200,6 +200,45 @@
   border-radius: 10px;
 }
 
+.paperHeaderActions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.bulkDownloadWrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.bulkDownloadButton {
+  background: #0e5fd8;
+  border: none;
+  color: #fff;
+  border-radius: 10px;
+  padding: 9px 14px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.9rem;
+  white-space: nowrap;
+}
+
+.bulkDownloadButton:disabled {
+  background: #6b9dea;
+  cursor: not-allowed;
+}
+
+.bulkStatusMsg {
+  color: #1a5c2b;
+  font-size: 0.88rem;
+  background: #d4edda;
+  border-radius: 8px;
+  padding: 4px 10px;
+}
+
 .tokenPanel {
   margin-bottom: 18px;
   border: 1px solid #d9e7ff;

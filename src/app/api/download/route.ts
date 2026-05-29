@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getQuestionAnswersRaw, getQuestionPaperRaw, getServerAuthCode, parseJwtInfo } from "@/lib/testbook-api";
+import { getQuestionAnswersRaw, getQuestionPaperRaw, getServerAuthCode, initTestAttempt, parseJwtInfo } from "@/lib/testbook-api";
 import { getPaperTitle, mapAnswerLookup, mapExportRows } from "@/lib/testbook-mappers";
 
 function sanitizeFileName(name: string) {
@@ -135,7 +135,18 @@ export async function GET(request: NextRequest) {
   }
 
   const payload = result.body as Record<string, unknown>;
-  const answersResult = await getQuestionAnswersRaw(paperId, authCode);
+
+  // Try answers directly first; if the result is empty (not yet attempted), auto-attempt and retry once.
+  let answersResult = await getQuestionAnswersRaw(paperId, authCode);
+  if (answersResult.success) {
+    const rawData = (answersResult.body as Record<string, unknown>)?.data;
+    const isEmpty = !rawData || typeof rawData !== "object" || Object.keys(rawData).length === 0;
+    if (isEmpty) {
+      await initTestAttempt(paperId, authCode);
+      answersResult = await getQuestionAnswersRaw(paperId, authCode);
+    }
+  }
+
   const answersAvailable = answersResult.success;
   const answersMessage = answersAvailable
     ? "Answers loaded"

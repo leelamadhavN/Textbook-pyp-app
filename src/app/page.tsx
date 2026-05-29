@@ -134,6 +134,8 @@ export default function Home() {
   const [loadingRoles, setLoadingRoles] = useState(false);
   const [loadingPapers, setLoadingPapers] = useState(false);
   const [downloadingPaperId, setDownloadingPaperId] = useState("");
+  const [bulkDownloading, setBulkDownloading] = useState(false);
+  const [bulkStatus, setBulkStatus] = useState("");
 
   const [error, setError] = useState("");
 
@@ -281,6 +283,60 @@ export default function Home() {
   const handleSelectYear = (year: string) => {
     setSelectedYear(year);
     setPaperPage(1);
+  };
+
+  const handleBulkDownload = async () => {
+    if (!selectedRoleId) return;
+
+    setBulkDownloading(true);
+    setBulkStatus("Starting...");
+    setError("");
+
+    try {
+      const headers: Record<string, string> = {};
+      if (authToken) headers["x-auth-token"] = authToken;
+
+      const examName = selectedRole?.title ?? "exam";
+      const url =
+        `/api/bulk-download?examId=${encodeURIComponent(selectedRoleId)}` +
+        `&year=${encodeURIComponent(selectedYear)}` +
+        `&examName=${encodeURIComponent(examName)}`;
+
+      setBulkStatus("Attempting & downloading all papers…");
+      const response = await fetch(url, { method: "GET", headers });
+
+      if (!response.ok) {
+        const errorBody = (await response.json().catch(() => ({}))) as { message?: string };
+        throw new Error(errorBody.message || "Bulk download failed");
+      }
+
+      const total = response.headers.get("X-Papers-Total") ?? "?";
+      const processed = response.headers.get("X-Papers-Processed") ?? "?";
+      const failed = response.headers.get("X-Papers-Failed") ?? "0";
+      const questions = response.headers.get("X-Questions-Total") ?? "?";
+
+      const blob = await response.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = blobUrl;
+      const cd = response.headers.get("content-disposition");
+      link.download = getCsvFileNameFromHeaders(cd, `${examName}_all.csv`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(blobUrl);
+
+      const failedNum = Number(failed);
+      setBulkStatus(
+        `Done: ${processed}/${total} papers, ${questions} questions` +
+          (failedNum > 0 ? ` (${failed} failed)` : ""),
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Bulk download failed");
+      setBulkStatus("");
+    } finally {
+      setBulkDownloading(false);
+    }
   };
 
   const handleDownload = async (paper: Paper) => {
@@ -528,7 +584,26 @@ export default function Home() {
             <h2>
               Year Papers ({paperTotal}) - Page {paperPage} / {totalPaperPages}
             </h2>
-            {loadingPapers && <span className={styles.loading}>Loading papers...</span>}
+            <div className={styles.paperHeaderActions}>
+              {loadingPapers && <span className={styles.loading}>Loading papers...</span>}
+              {selectedRoleId && paperTotalOverall > 0 && (
+                <div className={styles.bulkDownloadWrap}>
+                  <button
+                    type="button"
+                    className={styles.bulkDownloadButton}
+                    onClick={() => void handleBulkDownload()}
+                    disabled={bulkDownloading}
+                  >
+                    {bulkDownloading
+                      ? bulkStatus || "Working…"
+                      : `Attempt & Download All (${selectedYear === "all" ? paperTotalOverall : paperTotal})`}
+                  </button>
+                  {!bulkDownloading && bulkStatus && (
+                    <span className={styles.bulkStatusMsg}>{bulkStatus}</span>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
 
           {!loadingPapers && papers.length === 0 && (

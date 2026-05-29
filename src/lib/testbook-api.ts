@@ -1,9 +1,9 @@
 const API1_URL =
   "https://api.testbook.com/api/v1/target-family-details?pageType=pyp&type=%5Bapp%5D%20Get%20Pyp%20Target%20SuperGroup&__projection=%7B%22superGroup%22:%7B%22_id%22:1,%22properties%22:1,%22targetsCount%22:1%7D%7D&language=English";
 
-// Server-side fallback token. Expires 2026-06-25. Override via TESTBOOK_AUTH_CODE env var or X-Auth-Token header from the UI.
+// Server-side fallback token. Expires 2026-06-28. Override via TESTBOOK_AUTH_CODE env var or X-Auth-Token header from the UI.
 const FALLBACK_AUTH_CODE =
-  "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczovL3Rlc3Rib29rLmNvbSIsInN1YiI6IjY0ZTdiNWYyOTAwMjc4NTg2NTMwMDdhYSIsImF1ZCI6IlRCIiwiZXhwIjoiMjAyNi0wNi0yNVQwOTo0NTo1My4zNjgxMzE2ODlaIiwiaWF0IjoiMjAyNi0wNS0yNlQwOTo0NTo1My4zNjgxMzE2ODlaIiwibmFtZSI6IlNhZ2FyIEJ1dGxhIiwiZW1haWwiOiJzYWdhci5idXRsYUBnbWFpbC5jb20iLCJvcmdJZCI6IiIsImhvbWVTdGF0ZUlkIjoiNWY5MTYzYTQyZWM4MjdiMjE4ZGFjZDJlIiwiaXNMTVNVc2VyIjpmYWxzZSwicm9sZXMiOiJzdHVkZW50In0.a3pmCRVeXplwGrBPigYDIg7jjL_fN9eYiAQr1fr-Bei0Z9u1i9C8Pqy9f3nW-6CEQi1ykCqN-gkkcy6dul5D-4zsRzZDkHBtlb9mYGjiOvAG9j3LDUBVkDVxvrJgtkqcPqXHKeYdl078NgREYtD0XG57zOD7aw-OJcIaDD70D3M";
+  "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJodHRwczovL3Rlc3Rib29rLmNvbSIsInN1YiI6IjY0ZTdiNWYyOTAwMjc4NTg2NTMwMDdhYSIsImF1ZCI6IlRCIiwiZXhwIjoiMjAyNi0wNi0yOFQwNTo1MjoyMy45OTczMzkyNzFaIiwiaWF0IjoiMjAyNi0wNS0yOVQwNTo1MjoyMy45OTczMzkyNzFaIiwibmFtZSI6IlNhZ2FyIEJ1dGxhIiwiZW1haWwiOiJzYWdhci5idXRsYUBnbWFpbC5jb20iLCJvcmdJZCI6IiIsImhvbWVTdGF0ZUlkIjoiNWY5MTYzYTQyZWM4MjdiMjE4ZGFjZDJlIiwiaXNMTVNVc2VyIjpmYWxzZSwicm9sZXMiOiJzdHVkZW50In0.Wil22IIfoe64aqEsoq-q34UPtRBMgy0LfZ7lliVoCqeDjnWutkolc2bvsfxNs4n2q55pb_v9zR1CqyyHTsp2bFAvHkM-brFgMUykonLEmkxgkiYS5oDCivQbsPl2v49MiTga6N9Emq-7dkKs6tAs7EZe_fG-1N_BVz5sZOiEdNo";
 
 export function getServerAuthCode(headerToken?: string | null): string {
   return headerToken ?? process.env.TESTBOOK_AUTH_CODE ?? FALLBACK_AUTH_CODE;
@@ -135,7 +135,7 @@ export async function getQuestionPaperRaw(paperId: string, authCode: string) {
   const encodedId = encodeURIComponent(paperId);
   const params = new URLSearchParams({
     auth_code: authCode,
-    "X-Tb-Client": "web,1.2",
+    "X-Tb-Client": "web,1.3",
     language: "English",
   });
 
@@ -162,12 +162,63 @@ export async function getQuestionPaperRaw(paperId: string, authCode: string) {
   );
 }
 
+// Replicates the minimum browser sequence needed to create an attempt and unlock answers:
+//   1. GET /state?beforeServe=true  → creates the attempt record (no attemptNo yet)
+//   2. GET /state?beforeServe=false → marks attempt as serving
+//   3. GET /state?beforeServe=true&attemptNo=1 → re-checks state with attempt context
+//   4. GET /v2.2/tests/{id}/analysis?attemptNo=1 → loads analysis page; server finalises attempt
+// The analysis call (step 4) is what makes /answers?attemptNo=1 return data.
+export async function initTestAttempt(paperId: string, authCode: string): Promise<void> {
+  const encodedId = encodeURIComponent(paperId);
+  const stateBase = `https://api-new.testbook.com/api/v2/tests/${encodedId}/state`;
+  const sharedState = {
+    auth_code: authCode,
+    "X-Tb-Client": "web,1.3",
+    language: "English",
+    client: "web",
+    testLang: "en",
+  };
+
+  // Step 1: create attempt (beforeServe=true, no attemptNo)
+  await fetch(
+    `${stateBase}?${new URLSearchParams({ ...sharedState, beforeServe: "true", random: String(Math.random()) }).toString()}`,
+    { method: "GET", cache: "no-store" },
+  ).catch(() => null);
+
+  // Step 2: mark as serving
+  await fetch(
+    `${stateBase}?${new URLSearchParams({ ...sharedState, beforeServe: "false", random: String(Math.random()) }).toString()}`,
+    { method: "GET", cache: "no-store" },
+  ).catch(() => null);
+
+  // Step 3: re-check state with attemptNo=1 (as the browser does after navigation)
+  await fetch(
+    `${stateBase}?${new URLSearchParams({ ...sharedState, beforeServe: "true", attemptNo: "1", random: String(Math.random()) }).toString()}`,
+    { method: "GET", cache: "no-store" },
+  ).catch(() => null);
+
+  // Step 4: call analysis endpoint — this is what the browser loads on the results page
+  //         and appears to be required for /answers?attemptNo=1 to return data
+  const analysisParams = new URLSearchParams({
+    auth_code: authCode,
+    "X-Tb-Client": "web,1.3",
+    language: "English",
+    attemptNo: "1",
+    requiredStateExamCutoffs: "true",
+  });
+  await fetch(
+    `https://api-new.testbook.com/api/v2.2/tests/${encodedId}/analysis?${analysisParams.toString()}`,
+    { method: "GET", cache: "no-store" },
+  ).catch(() => null);
+}
+
 export async function getQuestionAnswersRaw(paperId: string, authCode: string) {
   const encodedId = encodeURIComponent(paperId);
   const params = new URLSearchParams({
     auth_code: authCode,
-    "X-Tb-Client": "web,1.2",
+    "X-Tb-Client": "web,1.3",
     language: "English",
+    attemptNo: "1",
   });
 
   const url = `https://api-new.testbook.com/api/v2/tests/${encodedId}/answers?${params.toString()}`;
