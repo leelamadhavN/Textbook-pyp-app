@@ -353,7 +353,13 @@ export default function Home() {
       if (!allPapersData.success || !allPapersData.papers?.length) {
         throw new Error(allPapersData.message ?? "No papers found.");
       }
-      const allPapers = allPapersData.papers;
+      // Deduplicate by paper ID — some papers appear under multiple year buckets
+      const seenIds = new Set<string>();
+      const allPapers = allPapersData.papers.filter((p) => {
+        if (!p.id || seenIds.has(p.id)) return false;
+        seenIds.add(p.id);
+        return true;
+      });
 
       // Step 2: check availability for any papers not already in local state cache
       const unchecked = allPapers.filter((p) => paperStates[p.id] === undefined);
@@ -386,12 +392,24 @@ export default function Home() {
         throw new Error(`All ${allPapers.length} papers are locked for this account.`);
       }
 
-      // Step 4: download each accessible paper individually
+      // Step 4: deduplicate by title before downloading — same title = same paper, download only once
+      const seenTitles = new Set<string>();
+      const toDownload = accessible.filter((p) => {
+        const key = p.title.trim().toLowerCase();
+        if (seenTitles.has(key)) return false;
+        seenTitles.add(key);
+        return true;
+      });
+      const titleDupCount = accessible.length - toDownload.length;
+
       let downloaded = 0;
       let failed = 0;
 
-      for (let i = 0; i < accessible.length; i++) {
-        const paper = accessible[i];
+      // Safety net: also track server-returned filenames to catch any remaining collisions
+      const usedFileNames = new Set<string>();
+
+      for (let i = 0; i < toDownload.length; i++) {
+        const paper = toDownload[i];
         const state = allStates[paper.id];
         const label =
           state?.attemptsCompleted > 0
@@ -399,7 +417,7 @@ export default function Home() {
             : "attempting & extracting";
 
         setBulkStatus(
-          `[${i + 1}/${accessible.length}] ${label}: ${paper.title.slice(0, 45)}…`,
+          `[${i + 1}/${toDownload.length}] ${label}: ${paper.title.slice(0, 45)}…`,
         );
 
         try {
@@ -415,12 +433,21 @@ export default function Home() {
             continue;
           }
 
+          const cd = response.headers.get("content-disposition");
+          const fileName = getCsvFileNameFromHeaders(cd, `${paper.title}.csv`);
+
+          // Safety net: skip if server returned a name we already used
+          if (usedFileNames.has(fileName.toLowerCase())) {
+            console.warn(`[bulk] duplicate filename skipped: ${fileName}`);
+            continue;
+          }
+          usedFileNames.add(fileName.toLowerCase());
+
           const blob = await response.blob();
           const blobUrl = URL.createObjectURL(blob);
           const link = document.createElement("a");
           link.href = blobUrl;
-          const cd = response.headers.get("content-disposition");
-          link.download = getCsvFileNameFromHeaders(cd, `${paper.title}.csv`);
+          link.download = fileName;
           document.body.appendChild(link);
           link.click();
           link.remove();
@@ -429,7 +456,7 @@ export default function Home() {
           downloaded++;
 
           // Brief pause so the browser doesn't group/block successive downloads
-          if (i < accessible.length - 1) {
+          if (i < toDownload.length - 1) {
             await new Promise<void>((resolve) => setTimeout(resolve, 600));
           }
         } catch {
@@ -437,8 +464,11 @@ export default function Home() {
         }
       }
 
+      const dupMsg = titleDupCount > 0 ? ` · ${titleDupCount} duplicate title(s) skipped` : "";
+
       setBulkStatus(
-        `Done: ${downloaded} downloaded · ${lockedCount} locked · ${failed} failed`,
+        `Done: ${downloaded} downloaded · ${lockedCount} locked${dupMsg}` +
+          (failed > 0 ? ` · ${failed} failed` : ""),
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Bulk download failed");

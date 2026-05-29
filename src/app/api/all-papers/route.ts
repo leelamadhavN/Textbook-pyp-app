@@ -40,9 +40,15 @@ async function fetchAllPapers(examId: string, yearFilter: string): Promise<Paper
     ),
   );
 
+  const seen = new Set<string>();
   const all = yearResults
     .filter((r) => r.success)
-    .flatMap((r) => mapPapers(r.body as Record<string, unknown>));
+    .flatMap((r) => mapPapers(r.body as Record<string, unknown>))
+    .filter((p) => {
+      if (!p.id || seen.has(p.id)) return false;
+      seen.add(p.id);
+      return true;
+    });
 
   return all.slice(0, MAX_PAPERS);
 }
