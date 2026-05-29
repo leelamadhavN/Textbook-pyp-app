@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import styles from "./page.module.css";
 import type { Paper, Role, SuperGroup } from "@/lib/testbook-mappers";
 import type { JwtInfo } from "@/lib/testbook-api";
+import type { PaperStateInfo } from "@/app/api/paper-states/route";
 
 const AUTH_TOKEN_KEY = "tb_auth_token";
 
@@ -137,6 +138,10 @@ export default function Home() {
   const [bulkDownloading, setBulkDownloading] = useState(false);
   const [bulkStatus, setBulkStatus] = useState("");
 
+  const [paperStates, setPaperStates] = useState<Record<string, PaperStateInfo>>({});
+  const [loadingStates, setLoadingStates] = useState(false);
+  const [showOnlyAvailable, setShowOnlyAvailable] = useState(false);
+
   const [error, setError] = useState("");
 
   const [authToken, setAuthToken] = useState("");
@@ -163,6 +168,33 @@ export default function Home() {
     setAuthTokenInput("");
     localStorage.removeItem(AUTH_TOKEN_KEY);
   };
+
+  // Auto-check paper availability whenever the papers list or auth token changes
+  useEffect(() => {
+    if (papers.length === 0 || !authToken) {
+      setPaperStates({});
+      return;
+    }
+
+    const checkStates = async () => {
+      setLoadingStates(true);
+      try {
+        const ids = papers.map((p) => p.id).join(",");
+        const response = await fetch(`/api/paper-states?paperIds=${encodeURIComponent(ids)}`, {
+          headers: { "x-auth-token": authToken },
+          cache: "no-store",
+        });
+        const data = (await response.json()) as { success: boolean; states: Record<string, PaperStateInfo> };
+        if (data.success) setPaperStates(data.states);
+      } catch {
+        // silently fail — papers still show without availability info
+      } finally {
+        setLoadingStates(false);
+      }
+    };
+
+    void checkStates();
+  }, [papers, authToken]);
 
   useEffect(() => {
     const load = async () => {
@@ -280,6 +312,18 @@ export default function Home() {
     return yearCounts.slice(start, start + YEAR_PAGE_SIZE);
   }, [yearCounts, yearPage]);
 
+  // Papers filtered by availability toggle; only applies when states are loaded
+  const statesLoaded = Object.keys(paperStates).length > 0;
+  const displayedPapers = useMemo(() => {
+    if (!showOnlyAvailable || !statesLoaded) return papers;
+    return papers.filter((p) => paperStates[p.id]?.accessible !== false);
+  }, [papers, paperStates, showOnlyAvailable, statesLoaded]);
+
+  const accessibleCount = useMemo(
+    () => papers.filter((p) => paperStates[p.id]?.accessible === true).length,
+    [papers, paperStates],
+  );
+
   const handleSelectYear = (year: string) => {
     setSelectedYear(year);
     setPaperPage(1);
@@ -326,10 +370,13 @@ export default function Home() {
       link.remove();
       URL.revokeObjectURL(blobUrl);
 
+      const skipped = response.headers.get("X-Papers-Skipped") ?? "0";
       const failedNum = Number(failed);
+      const skippedNum = Number(skipped);
       setBulkStatus(
-        `Done: ${processed}/${total} papers, ${questions} questions` +
-          (failedNum > 0 ? ` (${failed} failed)` : ""),
+        `Done: ${processed}/${total} papers · ${questions} questions` +
+          (skippedNum > 0 ? ` · ${skipped} locked` : "") +
+          (failedNum > 0 ? ` · ${failed} failed` : ""),
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Bulk download failed");
@@ -586,6 +633,7 @@ export default function Home() {
             </h2>
             <div className={styles.paperHeaderActions}>
               {loadingPapers && <span className={styles.loading}>Loading papers...</span>}
+              {loadingStates && <span className={styles.loading}>Checking availability…</span>}
               {selectedRoleId && paperTotalOverall > 0 && (
                 <div className={styles.bulkDownloadWrap}>
                   <button
@@ -596,7 +644,9 @@ export default function Home() {
                   >
                     {bulkDownloading
                       ? bulkStatus || "Working…"
-                      : `Attempt & Download All (${selectedYear === "all" ? paperTotalOverall : paperTotal})`}
+                      : statesLoaded
+                        ? `Attempt & Download All (${accessibleCount} accessible)`
+                        : `Attempt & Download All (${selectedYear === "all" ? paperTotalOverall : paperTotal})`}
                   </button>
                   {!bulkDownloading && bulkStatus && (
                     <span className={styles.bulkStatusMsg}>{bulkStatus}</span>
@@ -606,27 +656,64 @@ export default function Home() {
             </div>
           </div>
 
-          {!loadingPapers && papers.length === 0 && (
-            <p className={styles.empty}>No papers found for selected role.</p>
+          {statesLoaded && papers.length > 0 && (
+            <div className={styles.availabilityFilterRow}>
+              <label className={styles.availabilityToggle}>
+                <input
+                  type="checkbox"
+                  checked={showOnlyAvailable}
+                  onChange={(e) => setShowOnlyAvailable(e.target.checked)}
+                />
+                Show available papers only
+                {statesLoaded && (
+                  <span className={styles.availabilityCount}>
+                    ({accessibleCount} of {papers.length} accessible on this page)
+                  </span>
+                )}
+              </label>
+            </div>
           )}
 
-          {papers.map((paper) => (
-            <article key={paper.id} className={styles.paperCard}>
-              <div className={styles.paperInfo}>
-                <h3>{paper.title}</h3>
-                <p>
-                  Year: {paper.year || "-"} | Date/Time: {formatDate(paper.examDate)} | Duration: {paper.durationMinutes} min
-                </p>
-              </div>
-              <button
-                className={styles.downloadButton}
-                onClick={() => void handleDownload(paper)}
-                disabled={downloadingPaperId === paper.id}
-              >
-                {downloadingPaperId === paper.id ? "Preparing Excel..." : "Download"}
-              </button>
-            </article>
-          ))}
+          {!loadingPapers && displayedPapers.length === 0 && (
+            <p className={styles.empty}>
+              {showOnlyAvailable && papers.length > 0
+                ? "No accessible papers on this page. Try turning off the filter or switching year."
+                : "No papers found for selected role."}
+            </p>
+          )}
+
+          {displayedPapers.map((paper) => {
+            const state = paperStates[paper.id];
+            const isLocked = state !== undefined && !state.accessible;
+            const isAvailable = state?.accessible === true;
+            return (
+              <article key={paper.id} className={`${styles.paperCard} ${isLocked ? styles.paperCardLocked : ""}`}>
+                <div className={styles.paperInfo}>
+                  <div className={styles.paperTitleRow}>
+                    <h3>{paper.title}</h3>
+                    {isLocked && <span className={styles.badgeLocked}>Locked</span>}
+                    {isAvailable && state.attemptsCompleted > 0 && (
+                      <span className={styles.badgeDone}>Attempted</span>
+                    )}
+                    {isAvailable && state.attemptsCompleted === 0 && (
+                      <span className={styles.badgeAvailable}>Available</span>
+                    )}
+                  </div>
+                  <p>
+                    Year: {paper.year || "-"} | Date/Time: {formatDate(paper.examDate)} | Duration: {paper.durationMinutes} min
+                  </p>
+                </div>
+                <button
+                  className={styles.downloadButton}
+                  onClick={() => void handleDownload(paper)}
+                  disabled={downloadingPaperId === paper.id || isLocked}
+                  title={isLocked ? "This paper is not accessible with your current account" : ""}
+                >
+                  {downloadingPaperId === paper.id ? "Preparing…" : isLocked ? "Locked" : "Download"}
+                </button>
+              </article>
+            );
+          })}
 
           {paperTotal > 0 && (
             <div className={styles.paginationRow}>

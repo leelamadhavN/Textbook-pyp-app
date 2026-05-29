@@ -239,6 +239,79 @@
   padding: 4px 10px;
 }
 
+.availabilityFilterRow {
+  display: flex;
+  align-items: center;
+  padding: 6px 2px;
+}
+
+.availabilityToggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  color: #2a4270;
+  font-weight: 500;
+}
+
+.availabilityToggle input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: #0e5fd8;
+}
+
+.availabilityCount {
+  color: #5b729f;
+  font-weight: 400;
+  font-size: 0.85rem;
+}
+
+.paperCardLocked {
+  opacity: 0.55;
+  background: #f5f5f5;
+}
+
+.paperTitleRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.paperTitleRow h3 {
+  color: #19376a;
+  font-size: 1rem;
+}
+
+.badgeLocked {
+  background: #e8e8e8;
+  color: #666;
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.badgeAvailable {
+  background: #d4edda;
+  color: #155724;
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.badgeDone {
+  background: #cce5ff;
+  color: #004085;
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
 .tokenPanel {
   margin-bottom: 18px;
   border: 1px solid #d9e7ff;
