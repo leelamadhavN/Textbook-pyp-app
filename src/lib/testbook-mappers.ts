@@ -29,10 +29,8 @@ export type ExportRow = {
   option_d: string;
   correct_option: string;
   solution_text: string;
-  topic: string;
   topic_subject: string;
   topic_category: string;
-  topic_type: string;
   difficulty: string;
   marks: number | string;
   negative_marks: number | string;
@@ -44,10 +42,8 @@ export type AnswerByQuestionId = Record<
     correctOption: string;
     solutionText: string;
     negativeMarks: number | null;
-    topic: string;
     topicSubject: string;
     topicCategory: string;
-    topicType: string;
   }
 >;
 
@@ -224,7 +220,7 @@ export function mapAnswerLookup(payload: AnyObject): AnswerByQuestionId {
     const solutionEn = (solutionObj.en ?? {}) as AnyObject;
     const valText = stripHtml(getString(answerObj.val));
     const solutionTextFromSol = stripHtml(getString(solutionEn.value));
-      const topicInfo = extractTopicInfo(answerObj);
+    const topicInfo = extractTopicInfo(answerObj);
 
     lookup[questionId] = {
       correctOption: extractCorrectAnswerValue(answerObj),
@@ -233,10 +229,8 @@ export function mapAnswerLookup(payload: AnyObject): AnswerByQuestionId {
         getFiniteNumber(answerObj.negMarks) ??
         getFiniteNumber(answerObj.negativeMarks) ??
         getFiniteNumber(answerObj.minusMarks),
-        topic: topicInfo.topic,
-        topicSubject: topicInfo.topicSubject,
-        topicCategory: topicInfo.topicCategory,
-        topicType: topicInfo.topicType,
+      topicSubject: topicInfo.topicSubject,
+      topicCategory: topicInfo.topicCategory,
     };
   }
 
@@ -352,10 +346,8 @@ export function mapExportRows(
         correct_option:
           answerInfo?.correctOption || extractCorrectOption(question),
         solution_text: clampExcelText(answerInfo?.solutionText || ""),
-        topic: answerInfo?.topic || "",
         topic_subject: answerInfo?.topicSubject || "",
         topic_category: answerInfo?.topicCategory || "",
-        topic_type: answerInfo?.topicType || "",
         difficulty: "",
         marks,
         negative_marks: negMarksRaw ?? "",

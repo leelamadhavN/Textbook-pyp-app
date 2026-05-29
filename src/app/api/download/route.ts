@@ -59,10 +59,8 @@ function toCsv(rows: ReturnType<typeof mapExportRows>): string {
     "option_d",
     "correct_option",
     "solution_text",
-    "topic",
     "topic_subject",
     "topic_category",
-    "topic_type",
     "difficulty",
     "marks",
     "negative_marks",
@@ -80,10 +78,8 @@ function toCsv(rows: ReturnType<typeof mapExportRows>): string {
       row.option_d,
       row.correct_option,
       row.solution_text,
-      row.topic,
       row.topic_subject,
       row.topic_category,
-      row.topic_type,
       row.difficulty,
       row.marks,
       row.negative_marks,
@@ -136,15 +132,18 @@ export async function GET(request: NextRequest) {
 
   const payload = result.body as Record<string, unknown>;
 
-  // Try answers directly first; if the result is empty (not yet attempted), auto-attempt and retry once.
+  // Fetch answers; retry with initTestAttempt if answers are unavailable for any reason:
+  //   - API returns 400 (paper not yet attempted) → success=false
+  //   - API returns 200 but data is empty
+  // Both cases require creating the attempt first.
   let answersResult = await getQuestionAnswersRaw(paperId, authCode);
-  if (answersResult.success) {
-    const rawData = (answersResult.body as Record<string, unknown>)?.data;
-    const isEmpty = !rawData || typeof rawData !== "object" || Object.keys(rawData).length === 0;
-    if (isEmpty) {
-      await initTestAttempt(paperId, authCode);
-      answersResult = await getQuestionAnswersRaw(paperId, authCode);
-    }
+  const answersData = answersResult.success
+    ? ((answersResult.body as Record<string, unknown>)?.data as Record<string, unknown> | null)
+    : null;
+  const answersEmpty = !answersData || Object.keys(answersData).length === 0;
+  if (answersEmpty) {
+    await initTestAttempt(paperId, authCode);
+    answersResult = await getQuestionAnswersRaw(paperId, authCode);
   }
 
   const answersAvailable = answersResult.success;
