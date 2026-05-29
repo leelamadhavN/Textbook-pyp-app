@@ -333,50 +333,112 @@ export default function Home() {
     if (!selectedRoleId) return;
 
     setBulkDownloading(true);
-    setBulkStatus("Starting...");
+    setBulkStatus("Fetching full papers list…");
     setError("");
 
     try {
       const headers: Record<string, string> = {};
       if (authToken) headers["x-auth-token"] = authToken;
 
-      const examName = selectedRole?.title ?? "exam";
-      const url =
-        `/api/bulk-download?examId=${encodeURIComponent(selectedRoleId)}` +
-        `&year=${encodeURIComponent(selectedYear)}` +
-        `&examName=${encodeURIComponent(examName)}`;
+      // Step 1: get all paper IDs for this exam / year (may span multiple pages)
+      const allPapersResp = await fetch(
+        `/api/all-papers?examId=${encodeURIComponent(selectedRoleId)}&year=${encodeURIComponent(selectedYear)}`,
+        { headers },
+      );
+      const allPapersData = (await allPapersResp.json()) as {
+        success: boolean;
+        papers: Paper[];
+        message?: string;
+      };
+      if (!allPapersData.success || !allPapersData.papers?.length) {
+        throw new Error(allPapersData.message ?? "No papers found.");
+      }
+      const allPapers = allPapersData.papers;
 
-      setBulkStatus("Attempting & downloading all papers…");
-      const response = await fetch(url, { method: "GET", headers });
+      // Step 2: check availability for any papers not already in local state cache
+      const unchecked = allPapers.filter((p) => paperStates[p.id] === undefined);
+      let allStates: Record<string, PaperStateInfo> = { ...paperStates };
 
-      if (!response.ok) {
-        const errorBody = (await response.json().catch(() => ({}))) as { message?: string };
-        throw new Error(errorBody.message || "Bulk download failed");
+      if (unchecked.length > 0) {
+        setBulkStatus(`Checking availability for ${unchecked.length} papers…`);
+        const statesResp = await fetch(
+          `/api/paper-states?paperIds=${encodeURIComponent(unchecked.map((p) => p.id).join(","))}`,
+          { headers },
+        );
+        const statesData = (await statesResp.json()) as {
+          success: boolean;
+          states: Record<string, PaperStateInfo>;
+        };
+        if (statesData.success) {
+          allStates = { ...allStates, ...statesData.states };
+          setPaperStates(allStates);
+        }
       }
 
-      const total = response.headers.get("X-Papers-Total") ?? "?";
-      const processed = response.headers.get("X-Papers-Processed") ?? "?";
-      const failed = response.headers.get("X-Papers-Failed") ?? "0";
-      const questions = response.headers.get("X-Questions-Total") ?? "?";
+      // Step 3: classify papers
+      const accessible = allPapers.filter((p) => {
+        const s = allStates[p.id];
+        return s === undefined || s.accessible;  // undefined = unknown, try anyway
+      });
+      const lockedCount = allPapers.length - accessible.length;
 
-      const blob = await response.blob();
-      const blobUrl = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = blobUrl;
-      const cd = response.headers.get("content-disposition");
-      link.download = getCsvFileNameFromHeaders(cd, `${examName}_all.csv`);
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(blobUrl);
+      if (accessible.length === 0) {
+        throw new Error(`All ${allPapers.length} papers are locked for this account.`);
+      }
 
-      const skipped = response.headers.get("X-Papers-Skipped") ?? "0";
-      const failedNum = Number(failed);
-      const skippedNum = Number(skipped);
+      // Step 4: download each accessible paper individually
+      let downloaded = 0;
+      let failed = 0;
+
+      for (let i = 0; i < accessible.length; i++) {
+        const paper = accessible[i];
+        const state = allStates[paper.id];
+        const label =
+          state?.attemptsCompleted > 0
+            ? "already attempted"
+            : "attempting & extracting";
+
+        setBulkStatus(
+          `[${i + 1}/${accessible.length}] ${label}: ${paper.title.slice(0, 45)}…`,
+        );
+
+        try {
+          const response = await fetch(`/api/download?paperId=${encodeURIComponent(paper.id)}`, {
+            method: "GET",
+            headers,
+          });
+
+          if (!response.ok) {
+            const errBody = (await response.json().catch(() => ({}))) as { message?: string };
+            console.warn(`[bulk] skip ${paper.title}: ${errBody.message ?? response.status}`);
+            failed++;
+            continue;
+          }
+
+          const blob = await response.blob();
+          const blobUrl = URL.createObjectURL(blob);
+          const link = document.createElement("a");
+          link.href = blobUrl;
+          const cd = response.headers.get("content-disposition");
+          link.download = getCsvFileNameFromHeaders(cd, `${paper.title}.csv`);
+          document.body.appendChild(link);
+          link.click();
+          link.remove();
+          URL.revokeObjectURL(blobUrl);
+
+          downloaded++;
+
+          // Brief pause so the browser doesn't group/block successive downloads
+          if (i < accessible.length - 1) {
+            await new Promise<void>((resolve) => setTimeout(resolve, 600));
+          }
+        } catch {
+          failed++;
+        }
+      }
+
       setBulkStatus(
-        `Done: ${processed}/${total} papers · ${questions} questions` +
-          (skippedNum > 0 ? ` · ${skipped} locked` : "") +
-          (failedNum > 0 ? ` · ${failed} failed` : ""),
+        `Done: ${downloaded} downloaded · ${lockedCount} locked · ${failed} failed`,
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Bulk download failed");
