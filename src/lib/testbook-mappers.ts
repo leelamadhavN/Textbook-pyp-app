@@ -49,7 +49,47 @@ export type AnswerByQuestionId = Record<
 
 type AnyObject = Record<string, unknown>;
 
-const EXCEL_CELL_CHAR_LIMIT = 32767;
+const HTML_ENTITIES: Record<string, string> = {
+  amp: "&",
+  apos: "'",
+  emsp: " ",
+  ensp: " ",
+  gt: ">",
+  hellip: "...",
+  ldquo: '"',
+  lsquo: "'",
+  lt: "<",
+  mdash: "-",
+  minus: "-",
+  nbsp: " ",
+  ndash: "-",
+  quot: '"',
+  rdquo: '"',
+  rsquo: "'",
+  shy: "",
+  thinsp: " ",
+  times: "x",
+  zwj: "",
+  zwnj: "",
+};
+
+const SOLUTION_TEXT_KEYS = [
+  "en",
+  "english",
+  "value",
+  "text",
+  "html",
+  "body",
+  "content",
+  "description",
+  "explanation",
+  "explanations",
+  "solution",
+  "solutions",
+  "solutionText",
+  "steps",
+  "children",
+];
 
 function getString(value: unknown): string {
   return typeof value === "string" ? value : "";
@@ -74,23 +114,138 @@ function getFiniteNumber(value: unknown): number | null {
   return null;
 }
 
-function stripHtml(input: string): string {
+function decodeCodePoint(value: string | number, fallback: string): string {
+  const codePoint = typeof value === "number" ? value : Number(value);
+  if (!Number.isInteger(codePoint) || codePoint < 0 || codePoint > 0x10ffff) {
+    return fallback;
+  }
+
+  try {
+    return String.fromCodePoint(codePoint);
+  } catch {
+    return fallback;
+  }
+}
+
+function decodeHtmlEntities(input: string): string {
   return input
-    .replace(/<[^>]*>/g, " ")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&#39;/g, "'")
-    .replace(/&quot;/g, '"')
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
+    .replace(/&#x([0-9a-f]+);/gi, (match, value: string) =>
+      decodeCodePoint(Number.parseInt(value, 16), match),
+    )
+    .replace(/&#(\d+);/g, (match, value: string) => decodeCodePoint(value, match))
+    .replace(/&([a-z][a-z0-9]+);/gi, (match, name: string) => {
+      const decoded = HTML_ENTITIES[name.toLowerCase()];
+      return decoded ?? match;
+    });
+}
+
+function stripTags(input: string): string {
+  return input
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<br\s*\/?>/gi, " ")
+    .replace(/<\/(p|div|li|tr|td|th|h[1-6]|ul|ol|table)>/gi, " ")
+    .replace(/<\/?[a-z][^>]*>/gi, " ");
+}
+
+function normalizePlainText(input: string): string {
+  return input
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, " ")
+    .replace(/\r\n?|\n|\u2028|\u2029/g, " ")
+    .replace(/[\u00a0\u1680\u180e\u2000-\u200d\u202f\u205f\u3000\ufeff]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
 
-function clampExcelText(input: string): string {
-  if (!input) return "";
-  if (input.length <= EXCEL_CELL_CHAR_LIMIT) return input;
-  return input.slice(0, EXCEL_CELL_CHAR_LIMIT - 3) + "...";
+function stripHtml(input: string): string {
+  let text = input;
+
+  for (let i = 0; i < 3; i += 1) {
+    const decoded = decodeHtmlEntities(stripTags(text));
+    if (decoded === text) {
+      break;
+    }
+    text = decoded;
+  }
+
+  return normalizePlainText(stripTags(text));
+}
+
+function collectSolutionText(value: unknown, seen = new Set<object>()): string[] {
+  if (typeof value === "string") {
+    return [value];
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => collectSolutionText(item, seen));
+  }
+
+  if (!value || typeof value !== "object") {
+    return [];
+  }
+
+  if (seen.has(value)) {
+    return [];
+  }
+  seen.add(value);
+
+  const source = value as AnyObject;
+  const nestedValues: unknown[] = [];
+  if (Object.prototype.hasOwnProperty.call(source, "en")) {
+    nestedValues.push(source.en);
+  }
+  if (Object.prototype.hasOwnProperty.call(source, "english")) {
+    nestedValues.push(source.english);
+  }
+
+  for (const key of SOLUTION_TEXT_KEYS) {
+    if (key === "en" || key === "english") continue;
+    if (Object.prototype.hasOwnProperty.call(source, key)) {
+      nestedValues.push(source[key]);
+    }
+  }
+
+  return nestedValues.flatMap((item) => collectSolutionText(item, seen));
+}
+
+function combineTextCandidates(candidates: unknown[]): string {
+  const seen = new Set<string>();
+  const parts: string[] = [];
+
+  for (const candidate of candidates.flatMap((item) => collectSolutionText(item))) {
+    const text = stripHtml(candidate);
+    if (!text || seen.has(text)) continue;
+    seen.add(text);
+    parts.push(text);
+  }
+
+  return parts.join(" ");
+}
+
+function extractSolutionText(answerObj: AnyObject): string {
+  return (
+    combineTextCandidates([
+      answerObj.sol,
+      answerObj.solution,
+      answerObj.solutions,
+      answerObj.solutionText,
+      answerObj.explanation,
+      answerObj.explanations,
+      answerObj.explanationText,
+    ]) || stripHtml(getString(answerObj.val))
+  );
+}
+
+function extractQuestionText(en: AnyObject): string {
+  const compText =
+    getString(en.comp) ||
+    getString(en.comprehension) ||
+    getString(en.passage) ||
+    getString(en.paragraph);
+  const questionText = getString(en.value);
+
+  return stripHtml(compText ? `${compText} ${questionText}` : questionText);
 }
 
 function isNonPreviousYearTitle(title: string): boolean {
@@ -216,15 +371,11 @@ export function mapAnswerLookup(payload: AnyObject): AnswerByQuestionId {
     if (!questionId || !answerValue || typeof answerValue !== "object") continue;
 
     const answerObj = answerValue as AnyObject;
-    const solutionObj = (answerObj.sol ?? {}) as AnyObject;
-    const solutionEn = (solutionObj.en ?? {}) as AnyObject;
-    const valText = stripHtml(getString(answerObj.val));
-    const solutionTextFromSol = stripHtml(getString(solutionEn.value));
     const topicInfo = extractTopicInfo(answerObj);
 
     lookup[questionId] = {
       correctOption: extractCorrectAnswerValue(answerObj),
-      solutionText: clampExcelText(solutionTextFromSol || valText),
+      solutionText: extractSolutionText(answerObj),
       negativeMarks:
         getFiniteNumber(answerObj.negMarks) ??
         getFiniteNumber(answerObj.negativeMarks) ??
@@ -338,14 +489,14 @@ export function mapExportRows(
 
       rows.push({
         question_number: index,
-        question_text: clampExcelText(stripHtml(getString(en.value))),
-        option_a: clampExcelText(stripHtml(optA)),
-        option_b: clampExcelText(stripHtml(optB)),
-        option_c: clampExcelText(stripHtml(optC)),
-        option_d: clampExcelText(stripHtml(optD)),
+        question_text: extractQuestionText(en),
+        option_a: stripHtml(optA),
+        option_b: stripHtml(optB),
+        option_c: stripHtml(optC),
+        option_d: stripHtml(optD),
         correct_option:
           answerInfo?.correctOption || extractCorrectOption(question),
-        solution_text: clampExcelText(answerInfo?.solutionText || ""),
+        solution_text: answerInfo?.solutionText || "",
         topic_subject: answerInfo?.topicSubject || "",
         topic_category: answerInfo?.topicCategory || "",
         difficulty: "",

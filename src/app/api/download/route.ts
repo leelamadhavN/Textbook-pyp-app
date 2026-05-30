@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getQuestionAnswersRaw, getQuestionPaperRaw, getServerAuthCode, initTestAttempt, parseJwtInfo } from "@/lib/testbook-api";
+import { rowsToCsv } from "@/lib/csv";
 import { getPaperTitle, mapAnswerLookup, mapExportRows } from "@/lib/testbook-mappers";
 
 function sanitizeFileName(name: string) {
@@ -43,12 +44,6 @@ function countQuestions(payload: Record<string, unknown>): number {
   return count;
 }
 
-function csvEscape(value: string | number): string {
-  const text = String(value ?? "");
-  const escaped = text.replace(/"/g, '""');
-  return `"${escaped}"`;
-}
-
 function toCsv(rows: ReturnType<typeof mapExportRows>): string {
   const headers = [
     "question_number",
@@ -66,10 +61,9 @@ function toCsv(rows: ReturnType<typeof mapExportRows>): string {
     "negative_marks",
   ];
 
-  const lines: string[] = [headers.map(csvEscape).join(",")];
-
-  for (const row of rows) {
-    const values = [
+  return rowsToCsv(
+    headers,
+    rows.map((row) => [
       row.question_number,
       row.question_text,
       row.option_a,
@@ -83,13 +77,8 @@ function toCsv(rows: ReturnType<typeof mapExportRows>): string {
       row.difficulty,
       row.marks,
       row.negative_marks,
-    ];
-
-    lines.push(values.map(csvEscape).join(","));
-  }
-
-  // BOM + sep line improves CSV delimiter detection in Excel on Windows locales.
-  return `\uFEFFsep=,\r\n${lines.join("\r\n")}`;
+    ]),
+  );
 }
 
 export async function GET(request: NextRequest) {
