@@ -149,6 +149,13 @@ function stripTags(input: string): string {
     .replace(/<\/?[a-z][^>]*>/gi, " ");
 }
 
+function stripUnsafeHtml(input: string): string {
+  return input
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
+    .replace(/<!--[\s\S]*?-->/g, " ");
+}
+
 function normalizePlainText(input: string): string {
   return input
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, " ")
@@ -158,17 +165,26 @@ function normalizePlainText(input: string): string {
     .trim();
 }
 
-function stripHtml(input: string): string {
+function decodeRepeatedHtmlEntities(input: string): string {
   let text = input;
 
   for (let i = 0; i < 3; i += 1) {
-    const decoded = decodeHtmlEntities(stripTags(text));
+    const decoded = decodeHtmlEntities(text);
     if (decoded === text) {
       break;
     }
     text = decoded;
   }
 
+  return text;
+}
+
+function normalizeHtmlContent(input: string): string {
+  return normalizePlainText(stripUnsafeHtml(decodeRepeatedHtmlEntities(input)));
+}
+
+function stripHtml(input: string): string {
+  const text = normalizeHtmlContent(input);
   return normalizePlainText(stripTags(text));
 }
 
@@ -214,7 +230,7 @@ function combineTextCandidates(candidates: unknown[]): string {
   const parts: string[] = [];
 
   for (const candidate of candidates.flatMap((item) => collectSolutionText(item))) {
-    const text = stripHtml(candidate);
+    const text = normalizeHtmlContent(candidate);
     if (!text || seen.has(text)) continue;
     seen.add(text);
     parts.push(text);
@@ -233,7 +249,7 @@ function extractSolutionText(answerObj: AnyObject): string {
       answerObj.explanation,
       answerObj.explanations,
       answerObj.explanationText,
-    ]) || stripHtml(getString(answerObj.val))
+    ]) || normalizeHtmlContent(getString(answerObj.val))
   );
 }
 
@@ -245,7 +261,7 @@ function extractQuestionText(en: AnyObject): string {
     getString(en.paragraph);
   const questionText = getString(en.value);
 
-  return stripHtml(compText ? `${compText} ${questionText}` : questionText);
+  return normalizeHtmlContent(compText ? `${compText} ${questionText}` : questionText);
 }
 
 function isNonPreviousYearTitle(title: string): boolean {
