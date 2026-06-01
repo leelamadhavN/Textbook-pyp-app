@@ -91,6 +91,13 @@ const SOLUTION_TEXT_KEYS = [
   "children",
 ];
 
+const SAFE_HTML_ATTRIBUTES: Record<string, Set<string>> = {
+  a: new Set(["href", "title"]),
+  img: new Set(["alt", "src", "title"]),
+  td: new Set(["colspan", "rowspan"]),
+  th: new Set(["colspan", "rowspan"]),
+};
+
 function getString(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
@@ -156,6 +163,53 @@ function stripUnsafeHtml(input: string): string {
     .replace(/<!--[\s\S]*?-->/g, " ");
 }
 
+function sanitizeAttributeValue(value: string): string {
+  return value.replace(/"/g, "&quot;").replace(/\r\n?|\n|\u2028|\u2029/g, " ");
+}
+
+function sanitizeHtmlAttributes(tagName: string, rawAttributes: string): string {
+  const safeAttributes = SAFE_HTML_ATTRIBUTES[tagName.toLowerCase()];
+  if (!safeAttributes || !rawAttributes.trim()) return "";
+
+  const attributes: string[] = [];
+  const attributePattern =
+    /([a-z_:][a-z0-9_:.-]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/gi;
+
+  for (const match of rawAttributes.matchAll(attributePattern)) {
+    const name = match[1].toLowerCase();
+    if (!safeAttributes.has(name) || name.startsWith("on")) continue;
+
+    const rawValue = match[2] ?? match[3] ?? match[4] ?? "";
+    const normalizedValue = rawValue.trim();
+    if (!normalizedValue) continue;
+
+    if (
+      (name === "href" || name === "src") &&
+      /^(?:javascript|data:text\/html)/i.test(normalizedValue)
+    ) {
+      continue;
+    }
+
+    attributes.push(`${name}="${sanitizeAttributeValue(normalizedValue)}"`);
+  }
+
+  return attributes.length > 0 ? ` ${attributes.join(" ")}` : "";
+}
+
+function simplifyHtmlMarkup(input: string): string {
+  return input
+    .replace(/<colgroup\b[^>]*>[\s\S]*?<\/colgroup>/gi, " ")
+    .replace(/<col\b[^>]*\/?>/gi, " ")
+    .replace(/<([a-z][a-z0-9]*)(\s[^<>]*?)(\/?)>/gi, (_match, tagName, rawAttributes, closingSlash) => {
+      const attributes = sanitizeHtmlAttributes(tagName, rawAttributes);
+      return `<${tagName.toLowerCase()}${attributes}${closingSlash}>`;
+    })
+    .replace(/<\/([a-z][a-z0-9]*)>/gi, (_match, tagName) => `</${tagName.toLowerCase()}>`)
+    .replace(/(?:<span>\s*){2,}/gi, "<span>")
+    .replace(/(?:\s*<\/span>){2,}/gi, "</span>")
+    .replace(/<p>\s*<\/p>/gi, " ");
+}
+
 function normalizePlainText(input: string): string {
   return input
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, " ")
@@ -180,7 +234,7 @@ function decodeRepeatedHtmlEntities(input: string): string {
 }
 
 function normalizeHtmlContent(input: string): string {
-  return normalizePlainText(stripUnsafeHtml(decodeRepeatedHtmlEntities(input)));
+  return normalizePlainText(simplifyHtmlMarkup(stripUnsafeHtml(decodeRepeatedHtmlEntities(input))));
 }
 
 function stripHtml(input: string): string {
