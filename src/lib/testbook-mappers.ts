@@ -540,7 +540,10 @@ export function mapExportRows(
 
     for (const question of questions) {
       const en = (question.en ?? {}) as AnyObject;
-      const options = (en.options ?? []) as AnyObject[];
+      const options = (
+        (Array.isArray(en.options) ? en.options :
+         Array.isArray(question.options) ? question.options : []) as AnyObject[]
+      );
       const questionId = getString(question._id);
       const answerInfo = answersLookup[questionId];
 

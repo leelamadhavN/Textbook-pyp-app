@@ -66,7 +66,8 @@ async function fetchJson(url: string): Promise<ApiResult> {
     },
   });
 
-  const text = await response.text();
+  const buffer = await response.arrayBuffer();
+  const text = new TextDecoder("utf-8").decode(buffer);
 
   let parsed: unknown = null;
   try {
