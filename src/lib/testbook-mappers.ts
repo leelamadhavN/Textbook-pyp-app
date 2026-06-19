@@ -148,18 +148,18 @@ function decodeHtmlEntities(input: string): string {
 
 function stripTags(input: string): string {
   return input
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script\b[^<>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[^<>]*>[\s\S]*?<\/style>/gi, " ")
     .replace(/<!--[\s\S]*?-->/g, " ")
     .replace(/<br\s*\/?>/gi, " ")
     .replace(/<\/(p|div|li|tr|td|th|h[1-6]|ul|ol|table)>/gi, " ")
-    .replace(/<\/?[a-z][^>]*>/gi, " ");
+    .replace(/<\/?[a-z][^<>]*>/gi, " ");
 }
 
 function stripUnsafeHtml(input: string): string {
   return input
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script\b[^<>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[^<>]*>[\s\S]*?<\/style>/gi, " ")
     .replace(/<!--[\s\S]*?-->/g, " ");
 }
 
@@ -198,8 +198,8 @@ function sanitizeHtmlAttributes(tagName: string, rawAttributes: string): string 
 
 function simplifyHtmlMarkup(input: string): string {
   return input
-    .replace(/<colgroup\b[^>]*>[\s\S]*?<\/colgroup>/gi, " ")
-    .replace(/<col\b[^>]*\/?>/gi, " ")
+    .replace(/<colgroup\b[^<>]*>[\s\S]*?<\/colgroup>/gi, " ")
+    .replace(/<col\b[^<>]*\/?>/gi, " ")
     .replace(/<([a-z][a-z0-9]*)(\s[^<>]*?)(\/?)>/gi, (_match, tagName, rawAttributes, closingSlash) => {
       const attributes = sanitizeHtmlAttributes(tagName, rawAttributes);
       return `<${tagName.toLowerCase()}${attributes}${closingSlash}>`;
