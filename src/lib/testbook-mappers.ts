@@ -239,7 +239,11 @@ function normalizeHtmlContent(input: string): string {
 
 function stripHtml(input: string): string {
   const text = normalizeHtmlContent(input);
-  return normalizePlainText(stripTags(text));
+  const withImgUrls = text.replace(
+    /<img\s[^>]*src\s*=\s*"([^"]*)"[^>]*\/?>/gi,
+    (_, src) => `[${src}]`,
+  );
+  return normalizePlainText(stripTags(withImgUrls));
 }
 
 function collectSolutionText(value: unknown, seen = new Set<object>()): string[] {
@@ -524,6 +528,39 @@ export function getPaperTitle(payload: AnyObject): string {
   return getString(((payload.data as AnyObject) ?? {}).title) || "question-paper";
 }
 
+function findOptionsArray(question: AnyObject, en: AnyObject): AnyObject[] {
+  const candidates = [
+    en.options,
+    question.options,
+    question.choices,
+    en.choices,
+    question.alternatives,
+    en.alternatives,
+  ];
+  for (const c of candidates) {
+    if (Array.isArray(c)) return c as AnyObject[];
+  }
+  return [];
+}
+
+function extractOptionValue(opt: unknown): string {
+  if (typeof opt === "string") return opt;
+  if (!opt || typeof opt !== "object") return "";
+  const obj = opt as AnyObject;
+  const optEn = (obj.en ?? {}) as AnyObject;
+  return getString(
+    obj.value ??
+      obj.text ??
+      obj.content ??
+      obj.html ??
+      obj.label ??
+      optEn.value ??
+      optEn.text ??
+      optEn.content ??
+      "",
+  );
+}
+
 export function mapExportRows(
   payload: AnyObject,
   answersLookup: AnswerByQuestionId = {},
@@ -540,17 +577,14 @@ export function mapExportRows(
 
     for (const question of questions) {
       const en = (question.en ?? {}) as AnyObject;
-      const options = (
-        (Array.isArray(en.options) ? en.options :
-         Array.isArray(question.options) ? question.options : []) as AnyObject[]
-      );
+      const options = findOptionsArray(question, en);
       const questionId = getString(question._id);
       const answerInfo = answersLookup[questionId];
 
-      const optA = getString((options[0] ?? {}).value);
-      const optB = getString((options[1] ?? {}).value);
-      const optC = getString((options[2] ?? {}).value);
-      const optD = getString((options[3] ?? {}).value);
+      const optA = extractOptionValue(options[0]);
+      const optB = extractOptionValue(options[1]);
+      const optC = extractOptionValue(options[2]);
+      const optD = extractOptionValue(options[3]);
 
       const marks = getNumber(question.posMarks);
       const negMarksRaw =
