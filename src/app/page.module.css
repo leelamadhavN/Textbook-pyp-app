@@ -393,6 +393,24 @@
   min-width: 40px;
 }
 
+.uploadInstanceSession {
+  color: #0e5fd8;
+  font-size: 0.75rem;
+  background: #eef5ff;
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-weight: 500;
+}
+
+.uploadInstanceShift {
+  color: #5b21b6;
+  font-size: 0.75rem;
+  background: #f3e8ff;
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-weight: 500;
+}
+
 .uploadInstanceQCount {
   color: #166534;
   font-size: 0.75rem;

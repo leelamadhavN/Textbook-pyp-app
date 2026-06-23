@@ -11,6 +11,8 @@ type InstanceProgress = {
   paperId: string;
   paperTitle: string;
   year: number;
+  session: string | null;
+  shift: string | null;
   instanceId: string | null;
   instanceStatus: "pending" | "created" | "exists" | "failed";
   instanceError?: string;
@@ -626,6 +628,7 @@ export default function Home() {
         papers: g.papers.map((p) => ({
           id: p.id,
           year: p.year,
+          examDate: p.examDate ?? "",
           displayName: p.title,
         })),
       }));
@@ -641,6 +644,7 @@ export default function Home() {
         body: JSON.stringify({
           action: "setup-batch",
           examName: selectedRole.title,
+          superGroupName: selectedSuperGroup?.title ?? "",
           paperTypeGroups,
         }),
       });
@@ -665,6 +669,8 @@ export default function Home() {
             paperId: string;
             paperTitle: string;
             year: number;
+            session: string | null;
+            shift: string | null;
             instanceId: string | null;
             status: "created" | "exists" | "failed";
             error?: string;
@@ -688,6 +694,8 @@ export default function Home() {
             paperId: inst.paperId,
             paperTitle: inst.paperTitle,
             year: inst.year,
+            session: inst.session ?? null,
+            shift: inst.shift ?? null,
             instanceId: inst.instanceId,
             instanceStatus: inst.status,
             instanceError: inst.error,
@@ -851,7 +859,8 @@ export default function Home() {
         sum +
         pt.instances.filter(
           (i) =>
-            i.uploadStatus === "failed" || i.instanceStatus === "failed" || (i.instanceId === null && i.instanceStatus !== "pending"),
+            i.uploadStatus === "failed" ||
+            i.instanceStatus === "failed",
         ).length,
       0,
     );
@@ -1141,7 +1150,7 @@ export default function Home() {
           </div>
 
           {/* ── Upload Progress Panel ── */}
-          {showUploadPanel && uploadProgress && (
+          {(showUploadPanel || uploading || uploadProgress?.completed) && uploadProgress && (
             <div className={styles.uploadPanel}>
               <div className={styles.uploadPanelHeader}>
                 <h3>
@@ -1158,9 +1167,15 @@ export default function Home() {
                 <button
                   type="button"
                   className={styles.uploadPanelClose}
-                  onClick={() => setShowUploadPanel(false)}
+                  onClick={() => {
+                    if (uploadProgress.completed) {
+                      setShowUploadPanel(false);
+                    }
+                  }}
+                  disabled={!uploadProgress.completed}
+                  title={uploadProgress.completed ? "Close panel" : "Panel will be closable when upload completes"}
                 >
-                  ✕
+                  {uploadProgress.completed ? "✕" : "—"}
                 </button>
               </div>
 
@@ -1218,12 +1233,22 @@ export default function Home() {
                         }`}
                       >
                         <span className={styles.uploadInstanceName}>
-                          {inst.paperTitle.slice(0, 55)}
-                          {inst.paperTitle.length > 55 ? "…" : ""}
+                          {inst.paperTitle.slice(0, 50)}
+                          {inst.paperTitle.length > 50 ? "…" : ""}
                         </span>
                         <span className={styles.uploadInstanceYear}>
                           {inst.year}
                         </span>
+                        {inst.session && (
+                          <span className={styles.uploadInstanceSession}>
+                            {inst.session} sess
+                          </span>
+                        )}
+                        {inst.shift && (
+                          <span className={styles.uploadInstanceShift}>
+                            {inst.shift}
+                          </span>
+                        )}
                         {inst.instanceStatus === "failed" ? (
                           <span className={styles.badgeFailedSmall}>instance failed</span>
                         ) : (

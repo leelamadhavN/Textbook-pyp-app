@@ -10,7 +10,10 @@ import {
   listPaperInstances,
   createPaperInstance,
   bulkImportQuestions,
+  mapSuperGroupToCategory,
+  assignSessionsAndShifts,
   type CsvQuestion,
+  type PaperInput,
 } from "@/lib/examprep-api";
 
 // ─── Request types ───────────────────────────────────────────
@@ -18,16 +21,18 @@ import {
 interface SetupRequest {
   action: "setup" | "setup-batch";
   examName: string;
+  superGroupName?: string;
   paperTypeGroups: Array<{
     stage: string;
     name: string;
-    papers: Array<{ id: string; year: number; displayName: string }>;
+    papers: Array<{ id: string; year: number; examDate?: string; displayName: string }>;
   }>;
 }
 
 interface EnsureExamRequest {
   action: "ensure-exam";
   examName: string;
+  superGroupName?: string;
 }
 
 interface EnsurePaperTypeRequest {
@@ -126,6 +131,8 @@ interface InstanceResult {
   paperId: string;
   paperTitle: string;
   year: number;
+  session: string | null;
+  shift: string | null;
   instanceId: string | null;
   status: "created" | "exists" | "failed";
   error?: string;
@@ -186,7 +193,10 @@ async function handleEnsureExam(req: EnsureExamRequest) {
     return NextResponse.json({ success: true, examId: existing.id, status: "exists" });
   }
 
-  const examId = await createExam(req.examName);
+  const category = req.superGroupName
+    ? mapSuperGroupToCategory(req.superGroupName)
+    : "other";
+  const examId = await createExam(req.examName, category);
   return NextResponse.json({ success: true, examId, status: "created" });
 }
 
@@ -235,9 +245,13 @@ async function handleEnsureInstance(req: EnsureInstanceRequest) {
 // ─── Batch setup ────────────────────────────────────────────
 
 async function handleSetupBatch(req: SetupRequest) {
-  const { examName, paperTypeGroups } = req;
+  const { examName, superGroupName, paperTypeGroups } = req;
 
   await loginExamprep();
+
+  const category = superGroupName
+    ? mapSuperGroupToCategory(superGroupName)
+    : "other";
 
   // Step 1: ensure exam
   let examId: string;
@@ -249,7 +263,7 @@ async function handleSetupBatch(req: SetupRequest) {
       examId = existing.id;
       examStatus = "exists";
     } else {
-      examId = await createExam(examName);
+      examId = await createExam(examName, category);
       examStatus = "created";
     }
   } catch (err) {
@@ -289,43 +303,73 @@ async function handleSetupBatch(req: SetupRequest) {
     const instances: InstanceResult[] = [];
 
     if (ptId) {
-      let existingInstances: Array<{ id: string; year: number; display_name: string }> = [];
+      // Assign sessions and shifts based on year + exam date
+      const paperInputs: PaperInput[] = ptGroup.papers.map((p) => ({
+        id: p.id,
+        year: p.year,
+        examDate: p.examDate ?? "",
+        displayName: p.displayName,
+      }));
+
+      const assigned = assignSessionsAndShifts(paperInputs);
+
+      let existingInstances: Array<{
+        id: string;
+        year: number;
+        session: string | null;
+        shift: string | null;
+        display_name: string;
+      }> = [];
       try {
         existingInstances = await listPaperInstances(ptId);
       } catch {
         // continue with empty list
       }
 
-      for (const paper of ptGroup.papers) {
-        const displayName = paper.displayName || `${ptGroup.name} ${paper.year}`;
-
+      for (const a of assigned) {
+        // Check if an instance with same year + session + shift already exists
         const existing = existingInstances.find(
-          (i) => i.display_name.toLowerCase() === displayName.toLowerCase(),
+          (i) =>
+            i.year === a.year &&
+            (i.session ?? null) === a.session &&
+            (i.shift ?? null) === a.shift,
         );
 
         if (existing) {
           instances.push({
-            paperId: paper.id,
-            paperTitle: displayName,
-            year: paper.year,
+            paperId: a.paperId,
+            paperTitle: a.displayName,
+            year: a.year,
+            session: a.session,
+            shift: a.shift,
             instanceId: existing.id,
             status: "exists",
           });
         } else {
           try {
-            const piId = await createPaperInstance(ptId, paper.year, displayName);
+            const piId = await createPaperInstance(
+              ptId,
+              a.year,
+              a.displayName,
+              a.session,
+              a.shift,
+            );
             instances.push({
-              paperId: paper.id,
-              paperTitle: displayName,
-              year: paper.year,
+              paperId: a.paperId,
+              paperTitle: a.displayName,
+              year: a.year,
+              session: a.session,
+              shift: a.shift,
               instanceId: piId,
               status: "created",
             });
           } catch (err) {
             instances.push({
-              paperId: paper.id,
-              paperTitle: displayName,
-              year: paper.year,
+              paperId: a.paperId,
+              paperTitle: a.displayName,
+              year: a.year,
+              session: a.session,
+              shift: a.shift,
               instanceId: null,
               status: "failed",
               error: err instanceof Error ? err.message : "Failed to create instance",
