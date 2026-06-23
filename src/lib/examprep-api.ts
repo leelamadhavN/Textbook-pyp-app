@@ -34,7 +34,6 @@ async function examprepFetch(
     };
   }
 
-  // On 401, re-authenticate and retry once
   if (res.status === 401 && retryOn401) {
     authCookieHeader = "";
     authCookies = [];
@@ -83,7 +82,6 @@ async function ensureLogin(): Promise<void> {
 
 export function mapSuperGroupToCategory(superGroupName: string): string {
   const name = superGroupName.toLowerCase().trim();
-
   if (/upsc|ias|ips|ifs|irs| civil/i.test(name)) return "civil_services";
   if (/ssc|state\s*psc|pcs|mpsc|uppsc|bpsc/i.test(name)) return "state_psc";
   if (/bank|ibps|sbi|rbi|insurance|lic/i.test(name)) return "banking";
@@ -94,7 +92,6 @@ export function mapSuperGroupToCategory(superGroupName: string): string {
   if (/medical|neet|aiims|pgimer|fmge/i.test(name)) return "medical";
   if (/\blaw\b|clat|ailet|lsat/i.test(name)) return "law";
   if (/management|cat|mat|xat|cmat|mba|business/i.test(name)) return "management";
-
   return "other";
 }
 
@@ -146,6 +143,7 @@ export async function createPaperType(
   examId: string,
   name: string,
   stage: string,
+  durationMinutes = 180,
 ): Promise<string> {
   await ensureLogin();
   const { ok, data } = await examprepFetch("/api/admin", {
@@ -153,7 +151,7 @@ export async function createPaperType(
     exam_id: examId,
     name,
     stage,
-    duration_minutes: 180,
+    duration_minutes: durationMinutes,
     total_marks: 100,
     total_questions: 100,
     negative_marking: 0,
@@ -161,6 +159,23 @@ export async function createPaperType(
   });
   if (!ok) throw new Error(`Failed to create paper type: ${JSON.stringify(data)}`);
   return ((data as Record<string, unknown>)?.paper_type as Record<string, unknown>)?.id as string;
+}
+
+export async function updatePaperType(
+  id: string,
+  data: Partial<{
+    duration_minutes: number;
+    total_marks: number;
+    total_questions: number;
+  }>,
+): Promise<void> {
+  await ensureLogin();
+  const { ok } = await examprepFetch("/api/admin", {
+    action: "update-paper-type",
+    id,
+    ...data,
+  });
+  if (!ok) throw new Error("Failed to update paper type metrics");
 }
 
 export async function listPaperInstances(
@@ -242,9 +257,10 @@ export async function bulkImportQuestions(
   return data as BulkImportResult;
 }
 
+// ── Paper type detection ───────────────────────────────────
+
 export function detectPaperType(title: string): { stage: string; name: string } {
   const t = title.toLowerCase().trim();
-
   const romanMap: Record<string, number> = { i: 1, ii: 2, iii: 3, iv: 4 };
   const romanLabels = ["", "I", "II", "III", "IV"];
 
@@ -260,18 +276,18 @@ export function detectPaperType(title: string): { stage: string; name: string } 
     const num = tierMatch[1]
       ? parseInt(tierMatch[1])
       : romanMap[tierMatch[2].toLowerCase()] ?? 1;
-    return { stage: `tier${num}`, name: `Tier ${num}` };
+    return { stage: `tier${num}`, name: `Tier-${romanLabels[num]}` };
   }
 
   if (t.match(/\bprelims\b|\bpreliminary\b|pre\s*\.?\s*exam\b/i)) {
     const pn = extractPaperNum(t);
-    const name = pn ? `Prelims Paper ${romanLabels[pn]}` : "Prelims";
+    const name = pn ? `Prelims Paper-${romanLabels[pn]}` : "Prelims";
     return { stage: "prelims", name };
   }
 
   if (t.match(/\bmains\b|\bmain\s*exam\b/i)) {
     const pn = extractPaperNum(t);
-    const name = pn ? `Mains Paper ${romanLabels[pn]}` : "Mains";
+    const name = pn ? `Mains Paper-${romanLabels[pn]}` : "Mains";
     return { stage: "mains", name };
   }
 
@@ -280,27 +296,29 @@ export function detectPaperType(title: string): { stage: string; name: string } 
     const num = paperMatch[1]
       ? parseInt(paperMatch[1])
       : romanMap[paperMatch[2].toLowerCase()] ?? 1;
-    return { stage: "single", name: `Paper ${romanLabels[num]}` };
+    return { stage: "single", name: `Paper-${romanLabels[num]}` };
   }
 
   const stageMatch = t.match(/stage\s*[-\s]?\s*([1-4])\b/i);
   if (stageMatch) {
-    return { stage: "single", name: `Stage ${stageMatch[1]}` };
+    return { stage: "single", name: `Stage-${romanLabels[parseInt(stageMatch[1])]}` };
   }
 
   return { stage: "single", name: "Single" };
 }
 
-// ── Session / Shift assignment ──────────────────────────────
+// ── Session / Shift / Display-name helpers ─────────────────
 
-const SESSION_ORDINALS = [
-  "first", "second", "third", "fourth", "fifth",
-  "sixth", "seventh", "eighth", "ninth", "tenth",
-];
+const SESSION_ORDINALS: Record<number, string> = {
+  1: "first", 2: "second", 3: "third", 4: "fourth", 5: "fifth",
+  6: "sixth", 7: "seventh", 8: "eighth", 9: "ninth", 10: "tenth",
+  11: "Eleventh", 12: "Twelfth", 13: "Thirteenth", 14: "Fourteenth",
+  15: "Fifteenth", 16: "Sixteenth", 17: "Seventeenth", 18: "Eighteenth",
+  19: "Nineteenth", 20: "Twentieth",
+};
 
 function sessionOrdinal(n: number): string {
-  if (n >= 1 && n <= SESSION_ORDINALS.length) return SESSION_ORDINALS[n - 1];
-  return `${n}th`;
+  return SESSION_ORDINALS[n] ?? `${n}th`;
 }
 
 export interface PaperInput {
@@ -308,6 +326,7 @@ export interface PaperInput {
   year: number;
   examDate: string;
   displayName: string;
+  durationMinutes: number;
 }
 
 export interface AssignedPaper {
@@ -315,22 +334,61 @@ export interface AssignedPaper {
   year: number;
   session: string | null;
   shift: string | null;
+  shiftNumber: number;
   displayName: string;
+  durationMinutes: number;
 }
 
 /**
- * Assigns session ("first", "second", ...) and shift ("Morning" / "Afternoon")
- * to papers within a paper-type group.
+ * Formats the paper-type name stored on examprep:
+ *   Multiple types → "SSC CGL Tier-I"
+ *   Single type    → "SSC CGL"
+ */
+export function formatPaperTypeName(
+  examName: string,
+  detectedName: string,
+  hasMultipleTypes: boolean,
+): string {
+  if (!hasMultipleTypes || detectedName === "Single") return examName;
+  return `${examName} ${detectedName}`;
+}
+
+/**
+ * Builds the instance display_name:
+ *   "{year} {examName} [{detectedName}] Shift {shiftNumber}"
+ * where the detectedName part is included only when multiple paper types exist.
+ */
+function formatDisplayName(
+  year: number,
+  examName: string,
+  detectedName: string,
+  hasMultipleTypes: boolean,
+  shiftNumber: number,
+): string {
+  const suffix = hasMultipleTypes && detectedName !== "Single"
+    ? ` ${detectedName}`
+    : "";
+  return `${year} ${examName}${suffix} Shift ${shiftNumber}`;
+}
+
+/**
+ * Assigns session ("first",…,"Twentieth",…), shift ("Morning"/"Afternoon"),
+ * a per-year sequential shift number, and formatted display_name.
  *
  * Rules:
- *  - Papers are grouped by year, then by exam-date within each year.
- *  - Papers sharing the same date are treated as shifts of that date.
- *  - Up to 2 papers per date → one session with "Morning" + "Afternoon".
- *  - 3+ papers on same date → split into sessions of 2 shifts each.
- *  - 1 paper on a date → session gets only "Morning" shift.
- *  - Papers without an exam-date are assigned sequentially (2 per session).
+ *  - Group by year, then by exam-date within year.
+ *  - Same date = shifts of that date (max 2 per session).
+ *  - 3+ on same date → split into multiple sessions of 2 each.
+ *  - 1 on a date → only "Morning" shift.
+ *  - No date → assigned sequentially, 2 per session.
+ *  - Shift number is sequential within each year (1, 2, 3, …).
  */
-export function assignSessionsAndShifts(papers: PaperInput[]): AssignedPaper[] {
+export function assignSessionsAndShifts(
+  papers: PaperInput[],
+  examName: string,
+  detectedName: string,
+  hasMultipleTypes: boolean,
+): AssignedPaper[] {
   const byYear = new Map<number, PaperInput[]>();
   for (const p of papers) {
     const list = byYear.get(p.year);
@@ -343,8 +401,6 @@ export function assignSessionsAndShifts(papers: PaperInput[]): AssignedPaper[] {
 
   for (const year of sortedYears) {
     const yearPapers = byYear.get(year)!;
-
-    // Separate papers with and without dates
     const byDate = new Map<string, PaperInput[]>();
     const noDatePapers: PaperInput[] = [];
 
@@ -361,58 +417,71 @@ export function assignSessionsAndShifts(papers: PaperInput[]): AssignedPaper[] {
 
     const sortedDates = [...byDate.keys()].sort();
     let sessionNum = 0;
+    let shiftNum = 0;
 
-    // Process papers grouped by date
     for (const dateKey of sortedDates) {
       const datePapers = byDate.get(dateKey)!;
       datePapers.sort((a, b) => a.displayName.localeCompare(b.displayName));
 
       for (let i = 0; i < datePapers.length; i += 2) {
         sessionNum++;
-        const s = sessionOrdinal(sessionNum);
+        const sess = sessionOrdinal(sessionNum);
+        shiftNum++;
+        const dur = datePapers[i].durationMinutes;
 
         result.push({
           paperId: datePapers[i].id,
           year,
-          session: s,
+          session: sess,
           shift: "Morning",
-          displayName: datePapers[i].displayName,
+          shiftNumber: shiftNum,
+          durationMinutes: dur,
+          displayName: formatDisplayName(year, examName, detectedName, hasMultipleTypes, shiftNum),
         });
 
         if (i + 1 < datePapers.length) {
+          shiftNum++;
           result.push({
             paperId: datePapers[i + 1].id,
             year,
-            session: s,
+            session: sess,
             shift: "Afternoon",
-            displayName: datePapers[i + 1].displayName,
+            shiftNumber: shiftNum,
+            durationMinutes: datePapers[i + 1].durationMinutes,
+            displayName: formatDisplayName(year, examName, detectedName, hasMultipleTypes, shiftNum),
           });
         }
       }
     }
 
-    // Papers without dates: assign 2 per session, sequential
     if (noDatePapers.length > 0) {
       noDatePapers.sort((a, b) => a.displayName.localeCompare(b.displayName));
       for (let i = 0; i < noDatePapers.length; i += 2) {
         sessionNum++;
-        const s = sessionOrdinal(sessionNum);
+        const sess = sessionOrdinal(sessionNum);
+        shiftNum++;
+        const dur = noDatePapers[i].durationMinutes;
 
         result.push({
           paperId: noDatePapers[i].id,
           year,
-          session: s,
+          session: sess,
           shift: "Morning",
-          displayName: noDatePapers[i].displayName,
+          shiftNumber: shiftNum,
+          durationMinutes: dur,
+          displayName: formatDisplayName(year, examName, detectedName, hasMultipleTypes, shiftNum),
         });
 
         if (i + 1 < noDatePapers.length) {
+          shiftNum++;
           result.push({
             paperId: noDatePapers[i + 1].id,
             year,
-            session: s,
+            session: sess,
             shift: "Afternoon",
-            displayName: noDatePapers[i + 1].displayName,
+            shiftNumber: shiftNum,
+            durationMinutes: noDatePapers[i + 1].durationMinutes,
+            displayName: formatDisplayName(year, examName, detectedName, hasMultipleTypes, shiftNum),
           });
         }
       }

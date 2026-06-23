@@ -629,6 +629,7 @@ export default function Home() {
           id: p.id,
           year: p.year,
           examDate: p.examDate ?? "",
+          durationMinutes: p.durationMinutes ?? 0,
           displayName: p.title,
         })),
       }));

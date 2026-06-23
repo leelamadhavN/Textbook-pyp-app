@@ -12,6 +12,7 @@ import {
   bulkImportQuestions,
   mapSuperGroupToCategory,
   assignSessionsAndShifts,
+  formatPaperTypeName,
   type CsvQuestion,
   type PaperInput,
 } from "@/lib/examprep-api";
@@ -25,7 +26,7 @@ interface SetupRequest {
   paperTypeGroups: Array<{
     stage: string;
     name: string;
-    papers: Array<{ id: string; year: number; examDate?: string; displayName: string }>;
+    papers: Array<{ id: string; year: number; examDate?: string; durationMinutes?: number; displayName: string }>;
   }>;
 }
 
@@ -276,24 +277,29 @@ async function handleSetupBatch(req: SetupRequest) {
     );
   }
 
-  // Step 2: ensure paper types and instances
+  const hasMultipleTypes = paperTypeGroups.length > 1;
   const paperTypes: PaperTypeResult[] = [];
 
   for (const ptGroup of paperTypeGroups) {
+    const formattedPtName = formatPaperTypeName(examName, ptGroup.name, hasMultipleTypes);
     let ptId: string | null = null;
     let ptStatus: "created" | "exists" | "failed" = "failed";
     let ptError: string | undefined;
+    let createdDuration = 180;
 
     try {
       const existingPTs = await listPaperTypes(examId);
       const match = existingPTs.find(
-        (e) => e.name.toLowerCase() === ptGroup.name.toLowerCase(),
+        (e) => e.name.toLowerCase() === formattedPtName.toLowerCase(),
       );
       if (match) {
         ptId = match.id;
         ptStatus = "exists";
       } else {
-        ptId = await createPaperType(examId, ptGroup.name, ptGroup.stage);
+        // Use max duration from papers in this group
+        const durs = ptGroup.papers.map((p) => p.durationMinutes ?? 0).filter((d) => d > 0);
+        createdDuration = durs.length > 0 ? Math.max(...durs) : 180;
+        ptId = await createPaperType(examId, formattedPtName, ptGroup.stage, createdDuration);
         ptStatus = "created";
       }
     } catch (err) {
@@ -303,15 +309,20 @@ async function handleSetupBatch(req: SetupRequest) {
     const instances: InstanceResult[] = [];
 
     if (ptId) {
-      // Assign sessions and shifts based on year + exam date
       const paperInputs: PaperInput[] = ptGroup.papers.map((p) => ({
         id: p.id,
         year: p.year,
         examDate: p.examDate ?? "",
         displayName: p.displayName,
+        durationMinutes: p.durationMinutes ?? 0,
       }));
 
-      const assigned = assignSessionsAndShifts(paperInputs);
+      const assigned = assignSessionsAndShifts(
+        paperInputs,
+        examName,
+        ptGroup.name,
+        hasMultipleTypes,
+      );
 
       let existingInstances: Array<{
         id: string;
@@ -323,11 +334,10 @@ async function handleSetupBatch(req: SetupRequest) {
       try {
         existingInstances = await listPaperInstances(ptId);
       } catch {
-        // continue with empty list
+        // continue
       }
 
       for (const a of assigned) {
-        // Check if an instance with same year + session + shift already exists
         const existing = existingInstances.find(
           (i) =>
             i.year === a.year &&
@@ -380,7 +390,7 @@ async function handleSetupBatch(req: SetupRequest) {
     }
 
     paperTypes.push({
-      name: ptGroup.name,
+      name: formattedPtName,
       stage: ptGroup.stage,
       paperTypeId: ptId,
       status: ptStatus,
