@@ -239,11 +239,29 @@ function normalizeHtmlContent(input: string): string {
 
 function stripHtml(input: string): string {
   const text = normalizeHtmlContent(input);
-  const withImgUrls = text.replace(
+
+  // Preserve <img> tags so image-based options render correctly in examprep
+  // Replace with placeholders, strip everything else, then restore
+  const imgTags: string[] = [];
+  const withPlaceholders = text.replace(
     /<img\s[^>]*src\s*=\s*"([^"]*)"[^>]*\/?>/gi,
-    (_, src) => `[${src}]`,
+    (match, src) => {
+      // Fix protocol-relative URLs (//cdn.testbook.com/... → https://cdn.testbook.com/...)
+      const fixedSrc = (src as string).startsWith("//")
+        ? `https:${src}`
+        : (src as string);
+      imgTags.push(`<img src="${fixedSrc}"/>`);
+      return `__IMG_PLACEHOLDER_${imgTags.length - 1}__`;
+    },
   );
-  return normalizePlainText(stripTags(withImgUrls));
+
+  const stripped = normalizePlainText(stripTags(withPlaceholders));
+
+  // Restore img tags
+  return stripped.replace(
+    /__IMG_PLACEHOLDER_(\d+)__/g,
+    (_, idx) => imgTags[parseInt(idx as string)] ?? "",
+  );
 }
 
 function collectSolutionText(value: unknown, seen = new Set<object>()): string[] {
