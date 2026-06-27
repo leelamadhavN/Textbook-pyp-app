@@ -5,6 +5,45 @@ import styles from "./page.module.css";
 import type { Paper, Role, SuperGroup } from "@/lib/testbook-mappers";
 import type { JwtInfo } from "@/lib/testbook-api";
 import type { PaperStateInfo } from "@/app/api/paper-states/route";
+import { detectPaperType } from "@/lib/examprep-api";
+
+type InstanceProgress = {
+  paperId: string;
+  paperTitle: string;
+  year: number;
+  session: string | null;
+  shift: string | null;
+  instanceId: string | null;
+  instanceStatus: "pending" | "created" | "exists" | "failed";
+  instanceError?: string;
+  uploadStatus: "pending" | "uploading" | "success" | "failed";
+  uploadError?: string;
+  questionCount?: number;
+  imported?: number;
+};
+
+type PaperTypeProgress = {
+  name: string;
+  stage: string;
+  paperTypeId: string | null;
+  status: "pending" | "created" | "exists" | "failed";
+  error?: string;
+  instances: InstanceProgress[];
+};
+
+type UploadProgressState = {
+  examName: string;
+  examId: string | null;
+  examStatus: "pending" | "created" | "exists" | "failed";
+  examError?: string;
+  paperTypes: PaperTypeProgress[];
+  currentStep: string;
+  totalPapers: number;
+  uploadedCount: number;
+  failedCount: number;
+  completed: boolean;
+  errorList: string[];
+};
 
 const AUTH_TOKEN_KEY = "tb_auth_token";
 
@@ -137,6 +176,11 @@ export default function Home() {
   const [downloadingPaperId, setDownloadingPaperId] = useState("");
   const [bulkDownloading, setBulkDownloading] = useState(false);
   const [bulkStatus, setBulkStatus] = useState("");
+
+  // Upload to examprep state
+  const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<UploadProgressState | null>(null);
+  const [showUploadPanel, setShowUploadPanel] = useState(false);
 
   const [paperStates, setPaperStates] = useState<Record<string, PaperStateInfo>>({});
   const [loadingStates, setLoadingStates] = useState(false);
@@ -478,6 +522,351 @@ export default function Home() {
     }
   };
 
+  const handleAttemptAndUpload = async () => {
+    if (!selectedRoleId || !selectedRole) return;
+
+    setUploading(true);
+    setShowUploadPanel(true);
+    setError("");
+
+    const initialProgress: UploadProgressState = {
+      examName: selectedRole.title,
+      examId: null,
+      examStatus: "pending",
+      paperTypes: [],
+      currentStep: "Fetching papers...",
+      totalPapers: 0,
+      uploadedCount: 0,
+      failedCount: 0,
+      completed: false,
+      errorList: [],
+    };
+    setUploadProgress(initialProgress);
+
+    try {
+      const headers: Record<string, string> = {};
+      if (authToken) headers["x-auth-token"] = authToken;
+
+      // Step 1: get all papers
+      updateProgress({ currentStep: "Fetching all papers..." });
+      const allPapersResp = await fetch(
+        `/api/all-papers?examId=${encodeURIComponent(selectedRoleId)}&year=${encodeURIComponent(selectedYear)}`,
+        { headers },
+      );
+      const allPapersData = (await allPapersResp.json()) as {
+        success: boolean;
+        papers: Paper[];
+        message?: string;
+      };
+      if (!allPapersData.success || !allPapersData.papers?.length) {
+        throw new Error(allPapersData.message ?? "No papers found.");
+      }
+
+      const seenIds = new Set<string>();
+      const allPapers = allPapersData.papers.filter((p) => {
+        if (!p.id || seenIds.has(p.id)) return false;
+        seenIds.add(p.id);
+        return true;
+      });
+
+      // Step 2: check availability
+      updateProgress({ currentStep: "Checking paper availability..." });
+      const unchecked = allPapers.filter((p) => paperStates[p.id] === undefined);
+      let allStates: Record<string, PaperStateInfo> = { ...paperStates };
+
+      if (unchecked.length > 0) {
+        const statesResp = await fetch(
+          `/api/paper-states?paperIds=${encodeURIComponent(unchecked.map((p) => p.id).join(","))}`,
+          { headers },
+        );
+        const statesData = (await statesResp.json()) as {
+          success: boolean;
+          states: Record<string, PaperStateInfo>;
+        };
+        if (statesData.success) {
+          allStates = { ...allStates, ...statesData.states };
+          setPaperStates(allStates);
+        }
+      }
+
+      const accessible = allPapers.filter((p) => {
+        const s = allStates[p.id];
+        return s === undefined || s.accessible;
+      });
+
+      if (accessible.length === 0) {
+        throw new Error("All papers are locked for this account.");
+      }
+
+      const seenTitles = new Set<string>();
+      const toUpload = accessible.filter((p) => {
+        const key = p.title.trim().toLowerCase();
+        if (seenTitles.has(key)) return false;
+        seenTitles.add(key);
+        return true;
+      });
+
+      // Step 3: detect paper types and group
+      updateProgress({ currentStep: "Detecting paper types..." });
+      const groupMap = new Map<
+        string,
+        { stage: string; name: string; papers: Paper[] }
+      >();
+
+      for (const paper of toUpload) {
+        const pt = detectPaperType(paper.title);
+        const key = pt.name;
+        if (!groupMap.has(key)) {
+          groupMap.set(key, { stage: pt.stage, name: pt.name, papers: [] });
+        }
+        groupMap.get(key)!.papers.push(paper);
+      }
+
+      const paperTypeGroups = Array.from(groupMap.values()).map((g) => ({
+        stage: g.stage,
+        name: g.name,
+        papers: g.papers.map((p) => ({
+          id: p.id,
+          year: p.year,
+          examDate: p.examDate ?? "",
+          durationMinutes: p.durationMinutes ?? 0,
+          displayName: p.title,
+        })),
+      }));
+
+      // Step 4: batch setup on examprep
+      updateProgress({
+        currentStep: `Setting up on examprep: ${selectedRole.title} (${paperTypeGroups.length} paper types, ${toUpload.length} papers)...`,
+      });
+
+      const setupResp = await fetch("/api/examprep", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "setup-batch",
+          examName: selectedRole.title,
+          superGroupName: selectedSuperGroup?.title ?? "",
+          paperTypeGroups,
+        }),
+      });
+
+      if (!setupResp.ok) {
+        const errData = await setupResp.json().catch(() => ({ message: "Setup failed" }));
+        throw new Error((errData as { message?: string }).message ?? "Setup failed");
+      }
+
+      const setupData = (await setupResp.json()) as {
+        success: boolean;
+        examId: string;
+        examStatus: "created" | "exists";
+        examName: string;
+        paperTypes: Array<{
+          name: string;
+          stage: string;
+          paperTypeId: string | null;
+          status: "created" | "exists" | "failed";
+          error?: string;
+          instances: Array<{
+            paperId: string;
+            paperTitle: string;
+            year: number;
+            session: string | null;
+            shift: string | null;
+            instanceId: string | null;
+            status: "created" | "exists" | "failed";
+            error?: string;
+          }>;
+        }>;
+      };
+
+      if (!setupData.success) {
+        throw new Error("Setup failed on examprep");
+      }
+
+      // Build full progress from setup response
+      const progressPTs: PaperTypeProgress[] = setupData.paperTypes.map(
+        (pt) => ({
+          name: pt.name,
+          stage: pt.stage,
+          paperTypeId: pt.paperTypeId,
+          status: pt.status,
+          error: pt.error,
+          instances: pt.instances.map((inst) => ({
+            paperId: inst.paperId,
+            paperTitle: inst.paperTitle,
+            year: inst.year,
+            session: inst.session ?? null,
+            shift: inst.shift ?? null,
+            instanceId: inst.instanceId,
+            instanceStatus: inst.status,
+            instanceError: inst.error,
+            uploadStatus: "pending" as const,
+          })),
+        }),
+      );
+
+      const totalPapers = progressPTs.reduce(
+        (sum, pt) => sum + pt.instances.length,
+        0,
+      );
+      const errorList: string[] = [];
+
+      // Record instance creation failures
+      for (const pt of progressPTs) {
+        if (pt.status === "failed") {
+          errorList.push(
+            `Paper type "${pt.name}" creation failed: ${pt.error ?? "Unknown error"}`,
+          );
+        }
+        for (const inst of pt.instances) {
+          if (inst.instanceStatus === "failed") {
+            errorList.push(
+              `Instance "${inst.paperTitle}" (${pt.name}) creation failed: ${inst.instanceError ?? "Unknown error"}`,
+            );
+          }
+        }
+      }
+
+      updateProgress({
+        examId: setupData.examId,
+        examStatus: setupData.examStatus,
+        paperTypes: progressPTs,
+        totalPapers,
+        currentStep: "Setup complete. Starting uploads...",
+        errorList,
+      });
+
+      // Step 5: upload each paper sequentially
+      for (const pt of progressPTs) {
+        for (let i = 0; i < pt.instances.length; i++) {
+          const inst = pt.instances[i];
+
+          if (!inst.instanceId || inst.instanceStatus === "failed") {
+            updateProgress({
+              currentStep: `Skipping "${inst.paperTitle}" (${pt.name}) — instance creation failed`,
+            });
+            continue;
+          }
+
+          // Mark as uploading
+          inst.uploadStatus = "uploading";
+          updateProgress({
+            currentStep: `[${getUploadedCount(progressPTs) + 1}/${totalPapers}] Uploading: ${inst.paperTitle.slice(0, 60)}...`,
+          });
+
+          try {
+            const uploadResp = await fetch("/api/examprep", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                action: "upload-paper",
+                paperId: inst.paperId,
+                authToken,
+                paperInstanceId: inst.instanceId,
+                paperTitle: inst.paperTitle,
+              }),
+            });
+
+            const uploadData = (await uploadResp.json()) as {
+              success: boolean;
+              paperTitle?: string;
+              questionCount?: number;
+              imported?: number;
+              errors?: string[];
+              message?: string;
+            };
+
+            if (uploadData.success) {
+              inst.uploadStatus = "success";
+              inst.questionCount = uploadData.questionCount;
+              inst.imported = uploadData.imported;
+              updateProgress({ uploadedCount: getUploadedCount(progressPTs) });
+            } else {
+              inst.uploadStatus = "failed";
+              inst.uploadError = uploadData.message ?? "Upload failed";
+              errorList.push(
+                `Upload failed: "${inst.paperTitle}" → Paper type "${pt.name}" — ${inst.uploadError}`,
+              );
+              updateProgress({
+                failedCount: getFailedCount(progressPTs),
+                errorList: [...errorList],
+              });
+            }
+          } catch (err) {
+            inst.uploadStatus = "failed";
+            inst.uploadError =
+              err instanceof Error ? err.message : "Network error";
+            errorList.push(
+              `Upload failed: "${inst.paperTitle}" → Paper type "${pt.name}" — ${inst.uploadError}`,
+            );
+            updateProgress({
+              failedCount: getFailedCount(progressPTs),
+              errorList: [...errorList],
+            });
+          }
+
+          updateProgress({ paperTypes: [...progressPTs] });
+
+          if (i < pt.instances.length - 1) {
+            await new Promise<void>((resolve) => setTimeout(resolve, 500));
+          }
+        }
+      }
+
+      // Done
+      const finalUploaded = getUploadedCount(progressPTs);
+      const finalFailed = getFailedCount(progressPTs);
+
+      updateProgress({
+        completed: true,
+        currentStep: `Done: ${finalUploaded} uploaded, ${finalFailed} failed`,
+        uploadedCount: finalUploaded,
+        failedCount: finalFailed,
+        errorList: [...errorList],
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Upload failed";
+      setError(msg);
+      updateProgress({
+        completed: true,
+        currentStep: `Failed: ${msg}`,
+        examStatus: "failed",
+        examError: msg,
+      });
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  function updateProgress(partial: Partial<UploadProgressState>) {
+    setUploadProgress((prev) => {
+      if (!prev) return prev;
+      return { ...prev, ...partial };
+    });
+  }
+
+  function getUploadedCount(paperTypes: PaperTypeProgress[]): number {
+    return paperTypes.reduce(
+      (sum, pt) =>
+        sum +
+        pt.instances.filter((i) => i.uploadStatus === "success").length,
+      0,
+    );
+  }
+
+  function getFailedCount(paperTypes: PaperTypeProgress[]): number {
+    return paperTypes.reduce(
+      (sum, pt) =>
+        sum +
+        pt.instances.filter(
+          (i) =>
+            i.uploadStatus === "failed" ||
+            i.instanceStatus === "failed",
+        ).length,
+      0,
+    );
+  }
+
   const handleDownload = async (paper: Paper) => {
     if (!paper.id) {
       setError("This paper does not have a valid test ID for download.");
@@ -732,7 +1121,7 @@ export default function Home() {
                     type="button"
                     className={styles.bulkDownloadButton}
                     onClick={() => void handleBulkDownload()}
-                    disabled={bulkDownloading}
+                    disabled={bulkDownloading || uploading}
                   >
                     {bulkDownloading
                       ? bulkStatus || "Working…"
@@ -743,10 +1132,184 @@ export default function Home() {
                   {!bulkDownloading && bulkStatus && (
                     <span className={styles.bulkStatusMsg}>{bulkStatus}</span>
                   )}
+                  <button
+                    type="button"
+                    className={styles.uploadButton}
+                    onClick={() => void handleAttemptAndUpload()}
+                    disabled={uploading || bulkDownloading || !authToken}
+                    title={!authToken ? "Set your Auth Token first" : "Extract papers and upload to ExamPrep platform"}
+                  >
+                    {uploading
+                      ? uploadProgress?.currentStep || "Uploading…"
+                      : statesLoaded
+                        ? `Attempt & Upload (${accessibleCount} accessible)`
+                        : `Attempt & Upload (${selectedYear === "all" ? paperTotalOverall : paperTotal})`}
+                  </button>
                 </div>
               )}
             </div>
           </div>
+
+          {/* ── Upload Progress Panel ── */}
+          {(showUploadPanel || uploading || uploadProgress?.completed) && uploadProgress && (
+            <div className={styles.uploadPanel}>
+              <div className={styles.uploadPanelHeader}>
+                <h3>
+                  Upload Progress: {uploadProgress.examName}
+                  {uploadProgress.completed && (
+                    <span className={uploadProgress.examStatus === "failed" ? styles.badgeFailed : styles.badgeSuccess}>
+                      {uploadProgress.examStatus === "failed" ? "FAILED" : "DONE"}
+                    </span>
+                  )}
+                  {!uploadProgress.completed && (
+                    <span className={styles.badgePending}>IN PROGRESS</span>
+                  )}
+                </h3>
+                <button
+                  type="button"
+                  className={styles.uploadPanelClose}
+                  onClick={() => {
+                    if (uploadProgress.completed) {
+                      setShowUploadPanel(false);
+                    }
+                  }}
+                  disabled={!uploadProgress.completed}
+                  title={uploadProgress.completed ? "Close panel" : "Panel will be closable when upload completes"}
+                >
+                  {uploadProgress.completed ? "✕" : "—"}
+                </button>
+              </div>
+
+              {/* Exam status */}
+              <div className={styles.uploadStatusRow}>
+                <span>Exam &quot;{uploadProgress.examName}&quot;</span>
+                <span
+                  className={
+                    uploadProgress.examStatus === "created" || uploadProgress.examStatus === "exists"
+                      ? styles.badgeSuccess
+                      : uploadProgress.examStatus === "failed"
+                        ? styles.badgeFailed
+                        : styles.badgePending
+                  }
+                >
+                  {uploadProgress.examStatus}
+                </span>
+              </div>
+
+              {/* Paper types & instances */}
+              {uploadProgress.paperTypes.map((pt) => {
+                const uploadedInPt = pt.instances.filter(
+                  (i) => i.uploadStatus === "success",
+                ).length;
+                return (
+                <div key={pt.name} className={styles.uploadPaperType}>
+                  <div className={styles.uploadPTHeader}>
+                    <strong>{pt.name}</strong>
+                    <span
+                      className={
+                        pt.status === "created" || pt.status === "exists"
+                          ? styles.badgeSuccess
+                          : pt.status === "failed"
+                            ? styles.badgeFailed
+                            : styles.badgePending
+                      }
+                    >
+                      {pt.status}
+                    </span>
+                    <span className={styles.uploadPTCount}>
+                      {uploadedInPt}/{pt.instances.length} uploaded
+                    </span>
+                  </div>
+                  {pt.error && (
+                    <div className={styles.uploadPTError}>{pt.error}</div>
+                  )}
+                  <div className={styles.uploadInstances}>
+                    {pt.instances.map((inst) => (
+                      <div
+                        key={inst.paperId}
+                        className={`${styles.uploadInstance} ${
+                          inst.uploadStatus === "uploading"
+                            ? styles.uploadInstanceActive
+                            : ""
+                        }`}
+                      >
+                        <span className={styles.uploadInstanceName}>
+                          {inst.paperTitle.slice(0, 50)}
+                          {inst.paperTitle.length > 50 ? "…" : ""}
+                        </span>
+                        <span className={styles.uploadInstanceYear}>
+                          {inst.year}
+                        </span>
+                        {inst.session && (
+                          <span className={styles.uploadInstanceSession}>
+                            {inst.session} sess
+                          </span>
+                        )}
+                        {inst.shift && (
+                          <span className={styles.uploadInstanceShift}>
+                            {inst.shift}
+                          </span>
+                        )}
+                        {inst.instanceStatus === "failed" ? (
+                          <span className={styles.badgeFailedSmall}>instance failed</span>
+                        ) : (
+                          <span
+                            className={
+                              inst.uploadStatus === "success"
+                                ? styles.badgeSuccess
+                                : inst.uploadStatus === "failed"
+                                  ? styles.badgeFailed
+                                  : inst.uploadStatus === "uploading"
+                                    ? styles.badgePending
+                                    : styles.badgePending
+                            }
+                          >
+                            {inst.uploadStatus}
+                          </span>
+                        )}
+                        {inst.questionCount != null && inst.uploadStatus === "success" && (
+                          <span className={styles.uploadInstanceQCount}>
+                            {inst.imported ?? inst.questionCount} q
+                          </span>
+                        )}
+                        {inst.uploadError && (
+                          <span className={styles.uploadInstanceError}>
+                            {inst.uploadError}
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                );
+              })}
+
+              {/* Current step */}
+              <div className={styles.uploadCurrentStep}>
+                {uploadProgress.currentStep}
+              </div>
+
+              {/* Error summary */}
+              {uploadProgress.completed && uploadProgress.errorList.length > 0 && (
+                <div className={styles.uploadErrorSummary}>
+                  <h4>
+                    ⚠ {uploadProgress.errorList.length} error
+                    {uploadProgress.errorList.length !== 1 ? "s" : ""} occurred
+                  </h4>
+                  <ul>
+                    {uploadProgress.errorList.map((err, i) => (
+                      <li key={i}>{err}</li>
+                    ))}
+                  </ul>
+                  <p className={styles.uploadErrorHint}>
+                    Download the failed papers individually using the
+                    &quot;Download&quot; button above and upload them manually at{" "}
+                    <code>examprep-web-mu.vercel.app/admin/questions/upload</code>
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
 
           {statesLoaded && papers.length > 0 && (
             <div className={styles.availabilityFilterRow}>
