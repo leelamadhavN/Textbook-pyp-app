@@ -322,6 +322,28 @@ function extractQuestionText(en: AnyObject): string {
   return normalizeHtmlContent(compText ? `${compText} ${questionText}` : questionText);
 }
 
+const DEVANAGARI_START = 0x0900;
+const DEVANAGARI_END = 0x097F;
+
+function hasEnglishContent(texts: string[]): boolean {
+  for (const text of texts) {
+    if (!text) continue;
+    let latin = 0;
+    let devanagari = 0;
+    for (const ch of text) {
+      const code = ch.charCodeAt(0);
+      if ((code >= 65 && code <= 90) || (code >= 97 && code <= 122)) {
+        latin++;
+      } else if (code >= DEVANAGARI_START && code <= DEVANAGARI_END) {
+        devanagari++;
+      }
+    }
+    // If text has Devanagari characters but zero Latin letters, it's non-English
+    if (devanagari > 0 && latin === 0) return false;
+  }
+  return true;
+}
+
 function isNonPreviousYearTitle(title: string): boolean {
   const normalized = title.trim().toLowerCase();
   if (!normalized) return true;
@@ -581,10 +603,22 @@ export function mapExportRows(
       const questionId = getString(question._id);
       const answerInfo = answersLookup[questionId];
 
-      const optA = extractOptionValue(options[0]);
-      const optB = extractOptionValue(options[1]);
-      const optC = extractOptionValue(options[2]);
-      const optD = extractOptionValue(options[3]);
+      const rawQuestionText = extractQuestionText(en);
+      const rawOptA = extractOptionValue(options[0]);
+      const rawOptB = extractOptionValue(options[1]);
+      const rawOptC = extractOptionValue(options[2]);
+      const rawOptD = extractOptionValue(options[3]);
+
+      // Skip questions that don't have English content
+      // (e.g., Hindi-only questions in bilingual papers like SSC GD)
+      if (!hasEnglishContent([rawQuestionText, rawOptA, rawOptB, rawOptC, rawOptD])) {
+        continue;
+      }
+
+      const optA = stripHtml(rawOptA);
+      const optB = stripHtml(rawOptB);
+      const optC = stripHtml(rawOptC);
+      const optD = stripHtml(rawOptD);
 
       const marks = getNumber(question.posMarks);
       const negMarksRaw =
@@ -596,11 +630,11 @@ export function mapExportRows(
 
       rows.push({
         question_number: index,
-        question_text: extractQuestionText(en),
-        option_a: stripHtml(optA),
-        option_b: stripHtml(optB),
-        option_c: stripHtml(optC),
-        option_d: stripHtml(optD),
+        question_text: rawQuestionText,
+        option_a: optA,
+        option_b: optB,
+        option_c: optC,
+        option_d: optD,
         correct_option:
           answerInfo?.correctOption || extractCorrectOption(question),
         solution_text: answerInfo?.solutionText || "",
