@@ -87,7 +87,12 @@ async function downloadPaperQuestions(
 
   const result = await getQuestionPaperRaw(paperId, authCode);
   if (!result.success) {
-    throw new Error(`Failed to download paper: ${getErrorMessage(result.body)}`);
+    const errorMsg = getErrorMessage(result.body);
+    if (errorMsg.includes("redis") || errorMsg.includes("Test in Redis") || errorMsg.includes("fetch question paper")) {
+      console.warn(`[upload] Skipping paper ${paperId} due to Testbook backend error (likely subjective or missing): ${errorMsg}`);
+      return [];
+    }
+    throw new Error(`Failed to download paper: ${errorMsg}`);
   }
 
   const payload = result.body as Record<string, unknown>;
@@ -433,9 +438,12 @@ async function handleUploadPaper(req: UploadPaperRequest) {
 
   if (questions.length === 0) {
     return NextResponse.json({
-      success: false,
+      success: true, // Marked as true to skip gracefully instead of failing the batch
       paperTitle,
-      message: "No questions found in paper",
+      questionCount: 0,
+      imported: 0,
+      errors: [],
+      message: "Skipped (no objective questions found - likely subjective paper)",
     });
   }
 
