@@ -184,6 +184,7 @@ export async function POST(request: NextRequest) {
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : "Internal error";
+    console.error(`[examprep/POST] Unhandled error for action="${body.action}":`, err);
     return NextResponse.json({ success: false, message }, { status: 500 });
   }
 }
@@ -250,29 +251,56 @@ async function handleEnsureInstance(req: EnsureInstanceRequest) {
 
 // ─── Batch setup ────────────────────────────────────────────
 
+async function processWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let i = 0;
+  const workers = Array(limit).fill(0).map(async () => {
+    while (i < items.length) {
+      const index = i++;
+      results[index] = await fn(items[index], index);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
 async function handleSetupBatch(req: SetupRequest) {
   const { examName, superGroupName, paperTypeGroups } = req;
 
+  console.log(`[setup-batch] Starting setup for exam="${examName}", superGroup="${superGroupName}", paperTypeGroups=${paperTypeGroups.length}`);
+  for (const ptg of paperTypeGroups) {
+    console.log(`[setup-batch]   Paper type group: name="${ptg.name}", stage="${ptg.stage}", papers=${ptg.papers.length}`);
+  }
+
+  console.log(`[setup-batch] Logging in to examprep...`);
   await loginExamprep();
+  console.log(`[setup-batch] Login complete.`);
 
   const category = superGroupName
     ? mapSuperGroupToCategory(superGroupName)
     : "other";
+  console.log(`[setup-batch] Mapped category: "${category}"`);
 
   // Step 1: ensure exam
   let examId: string;
   let examStatus: "created" | "exists";
   try {
+    console.log(`[setup-batch] Listing existing exams...`);
     const exams = await listExams();
+    console.log(`[setup-batch] Found ${exams.length} existing exams.`);
     const existing = exams.find((e) => e.name.toLowerCase() === examName.toLowerCase());
     if (existing) {
       examId = existing.id;
       examStatus = "exists";
+      console.log(`[setup-batch] Exam already exists: id=${examId}`);
     } else {
+      console.log(`[setup-batch] Creating new exam: name="${examName}", category="${category}"`);
       examId = await createExam(examName, category);
       examStatus = "created";
+      console.log(`[setup-batch] Exam created: id=${examId}`);
     }
   } catch (err) {
+    console.error(`[setup-batch] Exam creation failed:`, err);
     return NextResponse.json(
       {
         success: false,
@@ -287,28 +315,35 @@ async function handleSetupBatch(req: SetupRequest) {
 
   for (const ptGroup of paperTypeGroups) {
     const formattedPtName = formatPaperTypeName(examName, ptGroup.name, hasMultipleTypes);
+    console.log(`[setup-batch] Processing paper type: "${formattedPtName}" (detected: "${ptGroup.name}", stage: "${ptGroup.stage}"), ${ptGroup.papers.length} papers`);
     let ptId: string | null = null;
     let ptStatus: "created" | "exists" | "failed" = "failed";
     let ptError: string | undefined;
     let createdDuration = 180;
 
     try {
+      console.log(`[setup-batch]   Listing existing paper types for exam ${examId}...`);
       const existingPTs = await listPaperTypes(examId);
+      console.log(`[setup-batch]   Found ${existingPTs.length} existing paper types: ${existingPTs.map(pt => pt.name).join(', ')}`);
       const match = existingPTs.find(
         (e) => e.name.toLowerCase() === formattedPtName.toLowerCase(),
       );
       if (match) {
         ptId = match.id;
         ptStatus = "exists";
+        console.log(`[setup-batch]   Paper type exists: id=${ptId}`);
       } else {
         // Use max duration from papers in this group
         const durs = ptGroup.papers.map((p) => p.durationMinutes ?? 0).filter((d) => d > 0);
         createdDuration = durs.length > 0 ? Math.max(...durs) : 180;
+        console.log(`[setup-batch]   Creating paper type: "${formattedPtName}", stage="${ptGroup.stage}", duration=${createdDuration}`);
         ptId = await createPaperType(examId, formattedPtName, ptGroup.stage, createdDuration);
         ptStatus = "created";
+        console.log(`[setup-batch]   Paper type created: id=${ptId}`);
       }
     } catch (err) {
       ptError = err instanceof Error ? err.message : "Failed to create paper type";
+      console.error(`[setup-batch]   Paper type creation failed:`, ptError);
     }
 
     const instances: InstanceResult[] = [];
@@ -322,12 +357,14 @@ async function handleSetupBatch(req: SetupRequest) {
         durationMinutes: p.durationMinutes ?? 0,
       }));
 
+      console.log(`[setup-batch]   Assigning sessions/shifts for ${paperInputs.length} papers...`);
       const assigned = assignSessionsAndShifts(
         paperInputs,
         examName,
         ptGroup.name,
         hasMultipleTypes,
       );
+      console.log(`[setup-batch]   ${assigned.length} papers assigned to sessions/shifts`);
 
       let existingInstances: Array<{
         id: string;
@@ -337,12 +374,15 @@ async function handleSetupBatch(req: SetupRequest) {
         display_name: string;
       }> = [];
       try {
+        console.log(`[setup-batch]   Listing existing instances for paper type ${ptId}...`);
         existingInstances = await listPaperInstances(ptId);
-      } catch {
+        console.log(`[setup-batch]   Found ${existingInstances.length} existing instances`);
+      } catch (err) {
+        console.error(`[setup-batch]   Failed to list existing instances:`, err);
         // continue
       }
 
-      for (const a of assigned) {
+      const instanceResults = await processWithConcurrency(assigned, 10, async (a, idx) => {
         const existing = existingInstances.find(
           (i) =>
             i.year === a.year &&
@@ -351,48 +391,60 @@ async function handleSetupBatch(req: SetupRequest) {
         );
 
         if (existing) {
-          instances.push({
+          console.log(`[setup-batch]   [${idx + 1}/${assigned.length}] Instance exists: "${a.displayName}" (year=${a.year}, session=${a.session}, shift=${a.shift}) → id=${existing.id}`);
+          return {
             paperId: a.paperId,
             paperTitle: a.displayName,
             year: a.year,
             session: a.session,
             shift: a.shift,
             instanceId: existing.id,
-            status: "exists",
-          });
+            status: "exists" as const,
+          };
         } else {
           try {
+            console.log(`[setup-batch]   [${idx + 1}/${assigned.length}] Creating instance: "${a.displayName}" (year=${a.year}, session=${a.session}, shift=${a.shift})`);
             const piId = await createPaperInstance(
-              ptId,
+              ptId!,
               a.year,
               a.displayName,
               a.session,
               a.shift,
             );
-            instances.push({
+            console.log(`[setup-batch]   [${idx + 1}/${assigned.length}] Instance created: id=${piId}`);
+            return {
               paperId: a.paperId,
               paperTitle: a.displayName,
               year: a.year,
               session: a.session,
               shift: a.shift,
               instanceId: piId,
-              status: "created",
-            });
+              status: "created" as const,
+            };
           } catch (err) {
-            instances.push({
+            const errMsg = err instanceof Error ? err.message : "Failed to create instance";
+            console.error(`[setup-batch]   [${idx + 1}/${assigned.length}] Instance creation FAILED: "${a.displayName}" — ${errMsg}`);
+            return {
               paperId: a.paperId,
               paperTitle: a.displayName,
               year: a.year,
               session: a.session,
               shift: a.shift,
               instanceId: null,
-              status: "failed",
-              error: err instanceof Error ? err.message : "Failed to create instance",
-            });
+              status: "failed" as const,
+              error: errMsg,
+            };
           }
         }
-      }
+      });
+      
+      instances.push(...instanceResults);
     }
+
+    const createdCount = instances.filter(i => i.status === 'created').length;
+    const existsCount = instances.filter(i => i.status === 'exists').length;
+    const failedCount = instances.filter(i => i.status === 'failed').length;
+    console.log(`[setup-batch]   Paper type "${formattedPtName}" summary: ${createdCount} created, ${existsCount} existing, ${failedCount} failed`);
 
     paperTypes.push({
       name: formattedPtName,
@@ -403,6 +455,10 @@ async function handleSetupBatch(req: SetupRequest) {
       instances,
     });
   }
+
+  const totalInstances = paperTypes.reduce((s, pt) => s + pt.instances.length, 0);
+  const totalFailed = paperTypes.reduce((s, pt) => s + pt.instances.filter(i => i.status === 'failed').length, 0);
+  console.log(`[setup-batch] Setup complete: exam=${examId}, paperTypes=${paperTypes.length}, totalInstances=${totalInstances}, totalFailed=${totalFailed}`);
 
   return NextResponse.json({
     success: true,

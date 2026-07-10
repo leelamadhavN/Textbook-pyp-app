@@ -18,6 +18,7 @@ async function examprepFetch(
   }
 
   const url = `${EXAMPPREP_BASE_URL}${path}`;
+  const action = (body.action as string) ?? "unknown";
 
   let res: Response;
   try {
@@ -27,6 +28,7 @@ async function examprepFetch(
       body: JSON.stringify(body),
     });
   } catch (err) {
+    console.error(`[examprepFetch] Network error for ${action} ${path}:`, err instanceof Error ? err.message : err);
     return {
       ok: false,
       status: 502,
@@ -35,12 +37,15 @@ async function examprepFetch(
   }
 
   if (res.status === 401 && retryOn401) {
+    console.warn(`[examprepFetch] Got 401 for ${action} ${path}, re-logging in...`);
     authCookieHeader = "";
     authCookies = [];
     const loggedIn = await loginExamprep();
     if (loggedIn) {
+      console.log(`[examprepFetch] Re-login successful, retrying ${action}...`);
       return examprepFetch(path, body, false);
     }
+    console.error(`[examprepFetch] Re-login failed for ${action}`);
   }
 
   const setCookie = res.headers.getSetCookie?.() ?? [];
@@ -55,7 +60,12 @@ async function examprepFetch(
     data = await res.json().catch(() => null);
   } else {
     const text = await res.text().catch(() => "");
+    console.warn(`[examprepFetch] Non-JSON response for ${action} ${path}: status=${res.status}, contentType="${contentType}", body=${text.slice(0, 200)}`);
     data = text ? { error: text } : null;
+  }
+
+  if (!res.ok) {
+    console.error(`[examprepFetch] HTTP ${res.status} for ${action} ${path}:`, JSON.stringify(data).slice(0, 300));
   }
 
   return { ok: res.ok, status: res.status, data };
