@@ -646,6 +646,10 @@ export function mapExportRows(
         answerInfo?.negativeMarks ??
         null;
 
+      const questionTopic = extractTopicInfo(question);
+      const topicSubject = answerInfo?.topicSubject || questionTopic.topicSubject;
+      const topicCategory = answerInfo?.topicCategory || questionTopic.topicCategory;
+
       rows.push({
         question_number: index,
         question_text: rawQuestionText,
@@ -656,8 +660,8 @@ export function mapExportRows(
         correct_option:
           answerInfo?.correctOption || extractCorrectOption(question),
         solution_text: answerInfo?.solutionText || "",
-        topic_subject: answerInfo?.topicSubject || "",
-        topic_category: answerInfo?.topicCategory || "",
+        topic_subject: topicSubject,
+        topic_category: topicCategory,
         difficulty: "",
         marks,
         negative_marks: negMarksRaw ?? "",
