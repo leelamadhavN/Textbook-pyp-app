@@ -246,6 +246,9 @@ export interface CsvQuestion {
   negative_marks?: number;
   topic_subject?: string;
   topic_category?: string;
+  topic_type?: string;
+  subject_id?: string;
+  topic_id?: string;
 }
 
 export interface BulkImportResult {
@@ -265,6 +268,104 @@ export async function bulkImportQuestions(
   });
   if (!ok) throw new Error(`Failed to import questions: ${JSON.stringify(data)}`);
   return data as BulkImportResult;
+}
+
+// ── Subject / Chapter / Topic management ───────────────────
+
+export interface ExamprepSubject {
+  id: string;
+  exam_id: string;
+  name: string;
+}
+
+export interface ExamprepChapter {
+  id: string;
+  subject_id: string;
+  name: string;
+}
+
+export interface ExamprepTopic {
+  id: string;
+  chapter_id: string;
+  name: string;
+}
+
+export async function listSubjects(examId: string): Promise<ExamprepSubject[]> {
+  await ensureLogin();
+  const { ok, data } = await examprepFetch("/api/admin", {
+    action: "list-subjects",
+    exam_id: examId,
+  });
+  if (!ok) throw new Error("Failed to list subjects");
+  return ((data as Record<string, unknown>)?.subjects as Array<Record<string, unknown>>)?.map((s) => ({
+    id: s.id as string,
+    exam_id: s.exam_id as string,
+    name: s.name as string,
+  })) ?? [];
+}
+
+export async function createSubject(name: string, examId: string): Promise<ExamprepSubject> {
+  await ensureLogin();
+  const { ok, data } = await examprepFetch("/api/admin", {
+    action: "create-subject",
+    name,
+    exam_id: examId,
+  });
+  if (!ok) throw new Error(`Failed to create subject: ${JSON.stringify(data)}`);
+  const subject = (data as Record<string, unknown>)?.subject as Record<string, unknown>;
+  return { id: subject.id as string, exam_id: subject.exam_id as string, name: subject.name as string };
+}
+
+export async function listChapters(subjectId: string): Promise<ExamprepChapter[]> {
+  await ensureLogin();
+  const { ok, data } = await examprepFetch("/api/admin", {
+    action: "list-chapters",
+    subject_id: subjectId,
+  });
+  if (!ok) throw new Error("Failed to list chapters");
+  return ((data as Record<string, unknown>)?.chapters as Array<Record<string, unknown>>)?.map((c) => ({
+    id: c.id as string,
+    subject_id: c.subject_id as string,
+    name: c.name as string,
+  })) ?? [];
+}
+
+export async function createChapter(name: string, subjectId: string): Promise<ExamprepChapter> {
+  await ensureLogin();
+  const { ok, data } = await examprepFetch("/api/admin", {
+    action: "create-chapter",
+    name,
+    subject_id: subjectId,
+  });
+  if (!ok) throw new Error(`Failed to create chapter: ${JSON.stringify(data)}`);
+  const chapter = (data as Record<string, unknown>)?.chapter as Record<string, unknown>;
+  return { id: chapter.id as string, subject_id: chapter.subject_id as string, name: chapter.name as string };
+}
+
+export async function listTopics(chapterId: string): Promise<ExamprepTopic[]> {
+  await ensureLogin();
+  const { ok, data } = await examprepFetch("/api/admin", {
+    action: "list-topics",
+    chapter_id: chapterId,
+  });
+  if (!ok) throw new Error("Failed to list topics");
+  return ((data as Record<string, unknown>)?.topics as Array<Record<string, unknown>>)?.map((t) => ({
+    id: t.id as string,
+    chapter_id: t.chapter_id as string,
+    name: t.name as string,
+  })) ?? [];
+}
+
+export async function createTopic(name: string, chapterId: string): Promise<ExamprepTopic> {
+  await ensureLogin();
+  const { ok, data } = await examprepFetch("/api/admin", {
+    action: "create-topic",
+    name,
+    chapter_id: chapterId,
+  });
+  if (!ok) throw new Error(`Failed to create topic: ${JSON.stringify(data)}`);
+  const topic = (data as Record<string, unknown>)?.topic as Record<string, unknown>;
+  return { id: topic.id as string, chapter_id: topic.chapter_id as string, name: topic.name as string };
 }
 
 // ── Paper type detection ───────────────────────────────────

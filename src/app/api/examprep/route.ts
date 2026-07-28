@@ -13,6 +13,12 @@ import {
   mapSuperGroupToCategory,
   assignSessionsAndShifts,
   formatPaperTypeName,
+  listSubjects,
+  createSubject,
+  listChapters,
+  createChapter,
+  listTopics,
+  createTopic,
   type CsvQuestion,
   type PaperInput,
 } from "@/lib/examprep-api";
@@ -57,6 +63,7 @@ interface UploadPaperRequest {
   authToken: string;
   paperInstanceId: string;
   paperTitle: string;
+  examId: string;
 }
 
 type ExamPrepRequest =
@@ -125,6 +132,7 @@ async function downloadPaperQuestions(
     solution_text: row.solution_text || "",
     topic_subject: row.topic_subject || "",
     topic_category: row.topic_category || "",
+    topic_type: row.topic_type || "",
     difficulty: row.difficulty || undefined,
     marks: typeof row.marks === "number" ? row.marks : undefined,
     negative_marks: typeof row.negative_marks === "number" ? row.negative_marks : undefined,
@@ -472,7 +480,7 @@ async function handleSetupBatch(req: SetupRequest) {
 // ─── Upload paper ───────────────────────────────────────────
 
 async function handleUploadPaper(req: UploadPaperRequest) {
-  const { paperId, authToken, paperInstanceId, paperTitle } = req;
+  const { paperId, authToken, paperInstanceId, paperTitle, examId } = req;
 
   if (!paperId || !authToken || !paperInstanceId) {
     return NextResponse.json(
@@ -494,7 +502,7 @@ async function handleUploadPaper(req: UploadPaperRequest) {
 
   if (questions.length === 0) {
     return NextResponse.json({
-      success: true, // Marked as true to skip gracefully instead of failing the batch
+      success: true,
       paperTitle,
       questionCount: 0,
       imported: 0,
@@ -505,6 +513,89 @@ async function handleUploadPaper(req: UploadPaperRequest) {
 
   try {
     await loginExamprep();
+
+    if (examId) {
+      // ── Resolve subjects, chapters, and topics ──────────────
+      const subjectCache = new Map<string, string>(); // name → id
+      const chapterCache = new Map<string, string>(); // "subjectId::chapterName" → id
+      const topicCache = new Map<string, string>();   // "chapterId::topicName" → id
+
+      // Fetch existing subjects for this exam once
+      let existingSubjects = await listSubjects(examId);
+      for (const s of existingSubjects) {
+        subjectCache.set(s.name.toLowerCase(), s.id);
+      }
+
+      for (const q of questions) {
+        const subjectName = q.topic_subject?.trim();
+        const categoryName = q.topic_category?.trim();
+        const typeName = q.topic_type?.trim();
+
+        if (!subjectName) continue;
+
+        // 1. Ensure subject exists
+        let subjectId = subjectCache.get(subjectName.toLowerCase());
+        if (!subjectId) {
+          const newSubject = await createSubject(subjectName, examId);
+          subjectId = newSubject.id;
+          subjectCache.set(subjectName.toLowerCase(), subjectId);
+        }
+        q.subject_id = subjectId;
+
+        if (!categoryName) continue;
+
+        // 2. Ensure chapter exists under subject
+        const chapterKey = `${subjectId}::${categoryName.toLowerCase()}`;
+        let chapterId = chapterCache.get(chapterKey);
+        if (!chapterId) {
+          // Fetch chapters for this subject (cache on first access)
+          if (!chapterCache.has(`__fetched__${subjectId}`)) {
+            try {
+              const existingChapters = await listChapters(subjectId);
+              for (const c of existingChapters) {
+                chapterCache.set(`${subjectId}::${c.name.toLowerCase()}`, c.id);
+              }
+            } catch {
+              // list may fail for new subjects, that's ok
+            }
+            chapterCache.set(`__fetched__${subjectId}`, "1");
+          }
+          chapterId = chapterCache.get(chapterKey);
+        }
+        if (!chapterId) {
+          const newChapter = await createChapter(categoryName, subjectId);
+          chapterId = newChapter.id;
+          chapterCache.set(chapterKey, chapterId);
+        }
+
+        if (!typeName) continue;
+
+        // 3. Ensure topic exists under chapter
+        const topicKey = `${chapterId}::${typeName.toLowerCase()}`;
+        let topicId = topicCache.get(topicKey);
+        if (!topicId) {
+          if (!topicCache.has(`__fetched__${chapterId}`)) {
+            try {
+              const existingTopics = await listTopics(chapterId);
+              for (const t of existingTopics) {
+                topicCache.set(`${chapterId}::${t.name.toLowerCase()}`, t.id);
+              }
+            } catch {
+              // list may fail for new chapters, that's ok
+            }
+            topicCache.set(`__fetched__${chapterId}`, "1");
+          }
+          topicId = topicCache.get(topicKey);
+        }
+        if (!topicId) {
+          const newTopic = await createTopic(typeName, chapterId);
+          topicId = newTopic.id;
+          topicCache.set(topicKey, topicId);
+        }
+        q.topic_id = topicId;
+      }
+    }
+
     const result = await bulkImportQuestions(questions, paperInstanceId);
 
     return NextResponse.json({

@@ -764,6 +764,7 @@ export default function Home() {
                 authToken,
                 paperInstanceId: inst.instanceId,
                 paperTitle: inst.paperTitle,
+                examId: setupData.examId,
               }),
             });
 
