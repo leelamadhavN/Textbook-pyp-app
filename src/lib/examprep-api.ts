@@ -9,6 +9,7 @@ async function examprepFetch(
   path: string,
   body: Record<string, unknown>,
   retryOn401 = true,
+  maxRetries = 3,
 ): Promise<{ ok: boolean; status: number; data: unknown }> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -20,55 +21,69 @@ async function examprepFetch(
   const url = `${EXAMPPREP_BASE_URL}${path}`;
   const action = (body.action as string) ?? "unknown";
 
-  let res: Response;
-  try {
-    res = await fetch(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(body),
-    });
-  } catch (err) {
-    console.error(`[examprepFetch] Network error for ${action} ${path}:`, err instanceof Error ? err.message : err);
-    return {
-      ok: false,
-      status: 502,
-      data: { error: err instanceof Error ? err.message : "Upstream unreachable" },
-    };
-  }
-
-  if (res.status === 401 && retryOn401) {
-    console.warn(`[examprepFetch] Got 401 for ${action} ${path}, re-logging in...`);
-    authCookieHeader = "";
-    authCookies = [];
-    const loggedIn = await loginExamprep();
-    if (loggedIn) {
-      console.log(`[examprepFetch] Re-login successful, retrying ${action}...`);
-      return examprepFetch(path, body, false);
+  let lastError: unknown;
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+      });
+    } catch (err) {
+      lastError = err;
+      console.error(`[examprepFetch] Network error (attempt ${attempt + 1}/${maxRetries}) for ${action} ${path}:`, err instanceof Error ? err.message : err);
+      if (attempt < maxRetries - 1) {
+        await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+        continue;
+      }
+      return {
+        ok: false,
+        status: 502,
+        data: { error: err instanceof Error ? err.message : "Upstream unreachable" },
+      };
     }
-    console.error(`[examprepFetch] Re-login failed for ${action}`);
+
+    if (res.status === 401 && retryOn401) {
+      console.warn(`[examprepFetch] Got 401 for ${action} ${path}, re-logging in...`);
+      authCookieHeader = "";
+      authCookies = [];
+      const loggedIn = await loginExamprep();
+      if (loggedIn) {
+        console.log(`[examprepFetch] Re-login successful, retrying ${action}...`);
+        return examprepFetch(path, body, false);
+      }
+      console.error(`[examprepFetch] Re-login failed for ${action}`);
+    }
+
+    const setCookie = res.headers.getSetCookie?.() ?? [];
+    if (setCookie.length > 0) {
+      authCookies = setCookie;
+      authCookieHeader = authCookies.map((c) => c.split(";")[0]).join("; ");
+    }
+
+    let data: unknown;
+    const contentType = res.headers.get("Content-Type") || "";
+    if (contentType.includes("application/json")) {
+      data = await res.json().catch(() => null);
+    } else {
+      const text = await res.text().catch(() => "");
+      console.warn(`[examprepFetch] Non-JSON response for ${action} ${path}: status=${res.status}, contentType="${contentType}", body=${text.slice(0, 200)}`);
+      data = text ? { error: text } : null;
+    }
+
+    if (!res.ok) {
+      console.error(`[examprepFetch] HTTP ${res.status} for ${action} ${path}:`, JSON.stringify(data).slice(0, 300));
+    }
+
+    return { ok: res.ok, status: res.status, data };
   }
 
-  const setCookie = res.headers.getSetCookie?.() ?? [];
-  if (setCookie.length > 0) {
-    authCookies = setCookie;
-    authCookieHeader = authCookies.map((c) => c.split(";")[0]).join("; ");
-  }
-
-  let data: unknown;
-  const contentType = res.headers.get("Content-Type") || "";
-  if (contentType.includes("application/json")) {
-    data = await res.json().catch(() => null);
-  } else {
-    const text = await res.text().catch(() => "");
-    console.warn(`[examprepFetch] Non-JSON response for ${action} ${path}: status=${res.status}, contentType="${contentType}", body=${text.slice(0, 200)}`);
-    data = text ? { error: text } : null;
-  }
-
-  if (!res.ok) {
-    console.error(`[examprepFetch] HTTP ${res.status} for ${action} ${path}:`, JSON.stringify(data).slice(0, 300));
-  }
-
-  return { ok: res.ok, status: res.status, data };
+  return {
+    ok: false,
+    status: 502,
+    data: { error: lastError instanceof Error ? lastError.message : "All retries exhausted" },
+  };
 }
 
 export async function loginExamprep(): Promise<boolean> {
@@ -268,6 +283,40 @@ export async function bulkImportQuestions(
   });
   if (!ok) throw new Error(`Failed to import questions: ${JSON.stringify(data)}`);
   return data as BulkImportResult;
+}
+
+export async function createQuestion(
+  question: CsvQuestion,
+  paperInstanceId: string,
+): Promise<string> {
+  await ensureLogin();
+  const body: Record<string, unknown> = {
+    action: "create-question",
+    paper_instance_id: paperInstanceId,
+    question_number: question.question_number,
+    question_text: question.question_text,
+    correct_option: question.correct_option,
+  };
+  if (question.option_a != null) body.option_a = question.option_a;
+  if (question.option_b != null) body.option_b = question.option_b;
+  if (question.option_c != null) body.option_c = question.option_c;
+  if (question.option_d != null) body.option_d = question.option_d;
+  if (question.solution_text) body.solution_text = question.solution_text;
+  if (question.difficulty) body.difficulty = question.difficulty;
+  if (typeof question.marks === "number") body.marks = question.marks;
+  if (typeof question.negative_marks === "number") body.negative_marks = question.negative_marks;
+  if (question.subject_id) body.subject_id = question.subject_id;
+  if (question.topic_id) body.topic_id = question.topic_id;
+  if (question.topic_subject) body.topic_subject = question.topic_subject;
+  if (question.topic_category) body.topic_category = question.topic_category;
+
+  if (question.topic_id) {
+    console.log(`[createQuestion] Q${question.question_number}: sending topic_id="${question.topic_id}"`);
+  }
+
+  const { ok, data } = await examprepFetch("/api/admin", body);
+  if (!ok) throw new Error(`Failed to create question: ${JSON.stringify(data)}`);
+  return ((data as Record<string, unknown>)?.question as Record<string, unknown>)?.id as string;
 }
 
 // ── Subject / Chapter / Topic management ───────────────────

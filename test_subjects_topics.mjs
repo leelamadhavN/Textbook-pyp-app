@@ -42,63 +42,79 @@ async function main() {
   const examsResp = await apiFetch("/api/admin", { action: "list-exams" });
   if (!examsResp.ok) { console.error("Failed to list exams"); return; }
   const exams = examsResp.data.exams ?? [];
-  console.log(`Found ${exams.length} exams:`);
-  for (const e of exams.slice(0, 5)) {
-    console.log(`  - ${e.name} (${e.id})`);
-  }
-  if (exams.length > 5) console.log(`  ... and ${exams.length - 5} more`);
 
-  // Prompt for exam name or use first one
-  const examName = process.argv[2] || exams[0]?.name;
-  if (!examName) { console.error("No exams found"); return; }
-  const exam = exams.find(e => e.name.toLowerCase() === examName.toLowerCase());
-  if (!exam) { console.error(`Exam "${examName}" not found`); return; }
+  // 2. Check subject/topic counts for EACH exam
+  console.log("\n=== SUBJECTS & TOPICS BY EXAM ===");
+  let totalSubjects = 0;
+  let totalTopics = 0;
 
-  // 2. List subjects for this exam
-  console.log(`\n=== SUBJECTS for "${exam.name}" ===`);
-  const subjResp = await apiFetch("/api/admin", {
-    action: "list-subjects",
-    exam_id: exam.id,
-  });
-  if (!subjResp.ok) { console.error("Failed to list subjects"); return; }
-  const subjects = subjResp.data.subjects ?? [];
-  console.log(`Found ${subjects.length} subjects:`);
-  for (const s of subjects) {
-    console.log(`  - ${s.name} (${s.id})`);
-  }
-
-  if (subjects.length === 0) {
-    console.log("\n⚠ No subjects found. Make sure you've uploaded papers with topic data.");
-    return;
-  }
-
-  // 3. For each subject, list chapters
-  for (const s of subjects) {
-    console.log(`\n=== CHAPTERS under "${s.name}" ===`);
-    const chapResp = await apiFetch("/api/admin", {
-      action: "list-chapters",
-      subject_id: s.id,
+  for (const exam of exams) {
+    const subjResp = await apiFetch("/api/admin", {
+      action: "list-subjects",
+      exam_id: exam.id,
     });
-    if (!chapResp.ok) { console.error(`  Failed to list chapters for ${s.name}`); continue; }
-    const chapters = chapResp.data.chapters ?? [];
-    console.log(`  Found ${chapters.length} chapters:`);
-    for (const c of chapters) {
-      console.log(`    - ${c.name} (${c.id})`);
+    const subjects = subjResp.ok ? (subjResp.data.subjects ?? []) : [];
+    totalSubjects += subjects.length;
 
-      // 4. For each chapter, list topics
-      const topResp = await apiFetch("/api/admin", {
-        action: "list-topics",
-        chapter_id: c.id,
+    let examTopics = 0;
+    for (const s of subjects) {
+      const chapResp = await apiFetch("/api/admin", {
+        action: "list-chapters",
+        subject_id: s.id,
       });
-      if (!topResp.ok) { console.error(`      Failed to list topics for ${c.name}`); continue; }
-      const topics = topResp.data.topics ?? [];
-      if (topics.length > 0) {
-        console.log(`      Topics (${topics.length}):`);
+      const chapters = chapResp.ok ? (chapResp.data.chapters ?? []) : [];
+      for (const c of chapters) {
+        const topResp = await apiFetch("/api/admin", {
+          action: "list-topics",
+          chapter_id: c.id,
+        });
+        const topics = topResp.ok ? (topResp.data.topics ?? []) : [];
+        examTopics += topics.length;
+      }
+    }
+
+    if (subjects.length > 0 || examTopics > 0) {
+      console.log(`  "${exam.name}": ${subjects.length} subjects, ${examTopics} topics`);
+    }
+  }
+
+  console.log(`\nTOTAL: ${totalSubjects} subjects, ${totalTopics} topics across ${exams.length} exams`);
+
+  // 3. If an exam name was provided, show details for that exam
+  const examName = process.argv[2];
+  if (examName) {
+    const exam = exams.find(e => e.name.toLowerCase() === examName.toLowerCase());
+    if (!exam) { console.error(`\nExam "${examName}" not found`); return; }
+
+    console.log(`\n=== DETAILS for "${exam.name}" ===`);
+    const subjResp = await apiFetch("/api/admin", {
+      action: "list-subjects",
+      exam_id: exam.id,
+    });
+    const subjects = subjResp.ok ? (subjResp.data.subjects ?? []) : [];
+    console.log(`${subjects.length} subjects:`);
+
+    for (const s of subjects) {
+      console.log(`\n  Subject: ${s.name}`);
+      const chapResp = await apiFetch("/api/admin", {
+        action: "list-chapters",
+        subject_id: s.id,
+      });
+      const chapters = chapResp.ok ? (chapResp.data.chapters ?? []) : [];
+      for (const c of chapters) {
+        console.log(`    Chapter: ${c.name}`);
+        const topResp = await apiFetch("/api/admin", {
+          action: "list-topics",
+          chapter_id: c.id,
+        });
+        const topics = topResp.ok ? (topResp.data.topics ?? []) : [];
         for (const t of topics) {
-          console.log(`        - ${t.name} (${t.id})`);
+          console.log(`      Topic: ${t.name}`);
         }
       }
     }
+  } else {
+    console.log("\n(To see full details for a specific exam, run: node test_subjects_topics.mjs \"Exam Name\")");
   }
 
   console.log("\n=== DONE ===");
