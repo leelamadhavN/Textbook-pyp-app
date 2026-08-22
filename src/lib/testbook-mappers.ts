@@ -55,22 +55,54 @@ const HTML_ENTITIES: Record<string, string> = {
   emsp: " ",
   ensp: " ",
   gt: ">",
-  hellip: "...",
+  hellip: "…",
   ldquo: '"',
   lsquo: "'",
   lt: "<",
-  mdash: "-",
-  minus: "-",
+  mdash: "—",
+  minus: "−",
   nbsp: " ",
-  ndash: "-",
+  ndash: "–",
   quot: '"',
   rdquo: '"',
   rsquo: "'",
   shy: "",
   thinsp: " ",
-  times: "x",
+  times: "×",
   zwj: "",
   zwnj: "",
+  // Greek
+  alpha: "α", beta: "β", gamma: "γ", delta: "δ", epsilon: "ε",
+  varepsilon: "ε", zeta: "ζ", eta: "η", theta: "θ", vartheta: "ϑ",
+  iota: "ι", kappa: "κ", lambda: "λ", mu: "μ", nu: "ν",
+  xi: "ξ", omicron: "ο", pi: "π", varpi: "ϖ", rho: "ρ",
+  varrho: "ϱ", sigma: "σ", sigmaf: "ς", tau: "τ", upsilon: "υ",
+  phi: "φ", varphi: "ϕ", chi: "χ", psi: "ψ", omega: "ω",
+  Alpha: "Α", Beta: "Β", Gamma: "Γ", Delta: "Δ", Epsilon: "Ε",
+  Zeta: "Ζ", Eta: "Η", Theta: "Θ", Iota: "Ι", Kappa: "Κ",
+  Lambda: "Λ", Mu: "Μ", Nu: "Ν", Xi: "Ξ", Omicron: "Ο",
+  Pi: "Π", Rho: "Ρ", Sigma: "Σ", Tau: "Τ", Upsilon: "Υ",
+  Phi: "Φ", Chi: "Χ", Psi: "Ψ", Omega: "Ω",
+  // Operators / relations
+  forall: "∀", exist: "∃", isin: "∈", notin: "∉", ni: "∋",
+  empty: "∅", nabla: "∇", part: "∂", prop: "∝", infin: "∞",
+  and: "∧", or: "∨", cap: "∩", cup: "∪", int: "∫",
+  sum: "∑", prod: "∏", coprod: "∐",
+  sim: "∼", cong: "≅", asymp: "≈", ne: "≠", equiv: "≡",
+  le: "≤", ge: "≥", sub: "⊂", sup: "⊃", nsub: "⊄",
+  sube: "⊆", supe: "⊇", oplus: "⊕", otimes: "⊗", perp: "⊥",
+  parallel: "∥", ang: "∠", sdot: "⋅", lowast: "∗", bull: "•",
+  // Arrows
+  larr: "←", uarr: "↑", rarr: "→", darr: "↓", harr: "↔",
+  lArr: "⇐", uArr: "⇑", rArr: "⇒", dArr: "⇓", hArr: "⇔",
+  // Misc symbols
+  there4: "∴", because: "∵", plusmn: "±", divide: "÷",
+  frac12: "½", frac13: "⅓", frac14: "¼", frac23: "⅔", frac34: "¾",
+  radic: "√", deg: "°", prime: "′", Prime: "″", micro: "µ",
+  middot: "·", lceil: "⌈", rceil: "⌉", lfloor: "⌊", rfloor: "⌋",
+  lang: "〈", rang: "〉", fnof: "ƒ", image: "ℑ", real: "ℜ",
+  weierp: "℘", alefsym: "ℵ", ocirc: "ô", Oslash: "Ø", oslash: "ø",
+  sup1: "¹", sup2: "²", sup3: "³", copy: "©", reg: "®", euro: "€",
 };
 
 const SOLUTION_TEXT_KEYS = [
@@ -93,10 +125,26 @@ const SOLUTION_TEXT_KEYS = [
 
 const SAFE_HTML_ATTRIBUTES: Record<string, Set<string>> = {
   a: new Set(["href", "title"]),
-  img: new Set(["alt", "src", "title"]),
+  img: new Set(["alt", "src", "title", "width", "height"]),
   td: new Set(["colspan", "rowspan"]),
   th: new Set(["colspan", "rowspan"]),
 };
+
+// Regex to find math delimited regions: \( ... \), $$ ... $$, \[ ... \]
+// These must be preserved verbatim during HTML stripping
+const MATH_DELIMITED_PATTERN =
+  /\\\([\s\S]*?\\\)|\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]/g;
+
+// LaTeX environment blocks: \begin{...} ... \end{...}
+const LATEX_ENV_PATTERN = /\\begin\{[^}]+\}[\s\S]*?\\end\{[^}]+\}/g;
+
+// Tags that must never survive into exported content (content is dropped too).
+// Everything else is preserved so the examprep renderer (DOMPurify) can display it.
+const UNSAFE_TAG_NAMES = new Set([
+  "script", "style", "iframe", "object", "embed", "form", "input",
+  "button", "textarea", "select", "option", "link", "meta", "svg",
+  "video", "audio", "canvas", "applet",
+]);
 
 function getString(value: unknown): string {
   return typeof value === "string" ? value : "";
@@ -146,19 +194,379 @@ function decodeHtmlEntities(input: string): string {
     });
 }
 
-function stripTags(input: string): string {
-  return input
-    .replace(/<script\b[^<>]*>[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style\b[^<>]*>[\s\S]*?<\/style>/gi, " ")
-    .replace(/<!--[\s\S]*?-->/g, " ")
-    .replace(/<br\s*\/?>/gi, " ")
-    .replace(/<\/(p|div|li|tr|td|th|h[1-6]|ul|ol|table)>/gi, " ")
-    .replace(/<\/?[a-z][^<>]*>/gi, " ");
+/**
+ * Removes only tags that are unsafe to keep in exported content. Allowed tags
+ * (p, table, sup, sub, strong, img, br, ...) are preserved so the examprep
+ * app renders them like Testbook's own CSV exports do.
+ */
+function stripDisallowedTags(input: string): string {
+  return input.replace(/<\/?([a-z][a-z0-9]*)\b[^<>]*>/gi, (tag, name: string) =>
+    UNSAFE_TAG_NAMES.has(name.toLowerCase()) ? "" : tag,
+  );
+}
+
+/**
+ * Converts MathJax-verbose LaTeX into KaTeX-compatible LaTeX.
+ * Testbook authors with MathJax-isms that KaTeX rejects:
+ *   - \mathop \sum \limits_{...}  →  \sum_{...}
+ *   - \mathop {\lim }\limits_{...} →  \lim\limits_{...}
+ *   - \begin{array}{*{20}{c}}     →  \begin{array}{cccc...}
+ *   - \log_{10}^\;{...}           →  \log_{10}^{...}
+ */
+function normalizeLatexForKatex(latex: string): string {
+  return latex
+    // \mathop <cmd> → <cmd> (KaTeX errors on \mathop \sum)
+    .replace(/\\mathop\s+(\\[a-zA-Z]+)/g, "$1")
+    // \mathop {\cmd} → \cmd
+    .replace(/\\mathop\s*\{\s*(\\[a-zA-Z]+)\s*\}/g, "$1")
+    // \mathop {<group>} → <group> (safe for non-command groups)
+    .replace(/\\mathop\s*\{\s*([^{}]*?)\s*\}/g, "$1")
+    // Spurious spacing commands after superscript/subscript: ^\; → ^
+    .replace(/(\^|_)\s*\\;/g, "$1")
+    // Expand MathJax column spec *{n}{cols} → cols repeated (KaTeX lacks *)
+    .replace(/\*\{(\d{1,2})\}\{([^{}]*)\}/g, (_match, n: string, cols: string) =>
+      String(cols).repeat(Math.max(1, Math.min(30, parseInt(n, 10)))),
+    );
+}
+
+/**
+ * Strips HTML tags from inside LaTeX content.
+ * Math renderers choke on any HTML embedded within \begin{...}\end{...} blocks.
+ */
+function cleanLatexContent(latex: string): string {
+  const withoutTags = latex.replace(/<\/?[a-z][^<>]*>/gi, "");
+  const decoded = withoutTags
+    // Decode HTML entities that were double-encoded
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"');
+  const normalized = normalizeLatexForKatex(decoded);
+  // Normalize whitespace but preserve intentional spacing commands
+  return normalized.replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Strips Microsoft Office namespace tags (<o:p>, etc.) that leak into
+ * Testbook content from copy-pasted Word documents.
+ */
+function stripOfficeTags(input: string): string {
+  return input.replace(/<\/?[a-z]:[a-z][^<>]*>/gi, "");
+}
+
+/**
+ * Fixes protocol-relative URLs (//cdn.testbook.com/...) by prepending https:
+ */
+function fixProtocolRelativeUrl(src: string): string {
+  return src.startsWith("//") ? `https:${src}` : src;
+}
+
+/**
+ * Decodes HTML entities in raw TeX source extracted from annotations,
+ * error spans, or MathJax containers.
+ */
+function decodeTexSource(tex: string): string {
+  return tex
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .trim();
+}
+
+/**
+ * Wraps raw TeX in delimiters so KaTeX renders it.
+ * Display mode for environments, row separators, and \left...\right blocks.
+ */
+function wrapTexInDelimiters(tex: string): string {
+  const trimmed = tex.trim();
+  if (!trimmed) return "";
+  const isDisplay =
+    /\\begin\s*\{/.test(trimmed) ||
+    /\\left[\[({]/.test(trimmed) ||
+    /(^|[^\\])\\\\/.test(trimmed);
+  return isDisplay ? `\\[${trimmed}\\]` : `\\(${trimmed}\\)`;
+}
+
+interface TagContainer {
+  index: number;
+  endIndex: number;
+  openTag: string;
+  inner: string;
+}
+
+function hasClassAttribute(tag: string, classWord: string): boolean {
+  return new RegExp(
+    `class\\s*=\\s*["'][^"']*\\b${classWord}\\b[^"']*["']`,
+    "i",
+  ).test(tag);
+}
+
+/**
+ * Finds the next balanced <tagName>...</tagName> container starting at
+ * startFrom, optionally requiring a specific CSS class word on the open tag.
+ * Handles nested tags of the same name (e.g. spans inside spans).
+ */
+function findTagContainer(
+  input: string,
+  tagName: string,
+  classWord: string | null,
+  startFrom = 0,
+): TagContainer | null {
+  const openPattern = new RegExp(`<${tagName}\\b[^>]*>`, "gi");
+  openPattern.lastIndex = startFrom;
+
+  let match: RegExpExecArray | null;
+  while ((match = openPattern.exec(input)) !== null) {
+    const openTag = match[0];
+    if (classWord && !hasClassAttribute(openTag, classWord)) continue;
+
+    const depthPattern = new RegExp(`<\\/?${tagName}\\b[^>]*>`, "gi");
+    depthPattern.lastIndex = openPattern.lastIndex;
+    let depth = 1;
+    let innerEnd = -1;
+    let depthMatch: RegExpExecArray | null;
+
+    while ((depthMatch = depthPattern.exec(input)) !== null) {
+      if (depthMatch[0].startsWith("</")) depth -= 1;
+      else depth += 1;
+      if (depth === 0) {
+        innerEnd = depthMatch.index;
+        break;
+      }
+    }
+
+    if (innerEnd === -1) return null;
+
+    return {
+      index: match.index,
+      endIndex: innerEnd + depthMatch![0].length,
+      openTag,
+      inner: input.slice(openPattern.lastIndex, innerEnd),
+    };
+  }
+
+  return null;
+}
+
+function extractAnnotationTex(markup: string): string {
+  const annotation =
+    markup.match(
+      /<annotation\b[^>]*encoding\s*=\s*["']application\/x-tex["'][^>]*>([\s\S]*?)<\/annotation>/i,
+    ) ??
+    markup.match(/<tex-math\b[^>]*>([\s\S]*?)<\/tex-math>/i) ??
+    markup.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i);
+  return annotation?.[1] ? decodeTexSource(annotation[1]) : "";
+}
+
+function stripAllTags(input: string): string {
+  return input.replace(/<\/?[a-z][^<>]*>/gi, "");
+}
+
+/**
+ * Replaces pre-rendered KaTeX / MathJax / MathML markup with clean,
+ * delimiter-wrapped TeX BEFORE any tag stripping happens. This is what
+ * prevents the "garbled math" problem: without this step, stripping tags
+ * from pre-rendered math leaves raw TeX mixed with rendered glyphs,
+ * HTML attribute fragments, and duplicate copies of formulas.
+ *
+ * Handles:
+ *  - <script type="math/tex..."> blocks
+ *  - <span class="katex-error" title="..."> spans (title holds raw TeX)
+ *  - <span class="katex"> spans (extracts application/x-tex annotation)
+ *  - <math> blocks (MathML semantics with application/x-tex annotation)
+ *  - <mjx-container> blocks (MathJax CHTML/SVG, data-tex attr or annotation)
+ *  - <span class="math-tex"> / <span class="MathJax"> wrappers (unwrap)
+ */
+function extractPreRenderedMath(input: string): string {
+  let text = input;
+
+  // 1) <script type="math/tex..."> blocks — raw TeX source
+  text = text.replace(
+    /<script\b[^>]*type\s*=\s*["'](?:math\/tex|application\/tex|text\/latex|math\/latex)[^"']*["'][^>]*>([\s\S]*?)<\/script>/gi,
+    (_match, tex: string) => wrapTexInDelimiters(decodeTexSource(tex)),
+  );
+
+  // 2) katex-error spans — raw TeX in the title attribute (or text content)
+  let container: TagContainer | null;
+  while ((container = findTagContainer(text, "span", "katex-error")) !== null) {
+    const titleMatch = container.openTag.match(/title\s*=\s*["']([\s\S]*?)["']/i);
+    let tex = titleMatch?.[1] ? decodeTexSource(titleMatch[1]) : "";
+    if (!tex) tex = decodeTexSource(stripAllTags(container.inner));
+    text =
+      text.slice(0, container.index) +
+      wrapTexInDelimiters(tex) +
+      text.slice(container.endIndex);
+  }
+
+  // 3) katex spans — pre-rendered formulas; use the x-tex annotation
+  while ((container = findTagContainer(text, "span", "katex")) !== null) {
+    const tex = extractAnnotationTex(container.inner);
+    text =
+      text.slice(0, container.index) +
+      wrapTexInDelimiters(tex) +
+      text.slice(container.endIndex);
+  }
+
+  // 4) <math> blocks — MathML with an x-tex annotation
+  while ((container = findTagContainer(text, "math", null)) !== null) {
+    const tex = extractAnnotationTex(container.inner);
+    text =
+      text.slice(0, container.index) +
+      wrapTexInDelimiters(tex) +
+      text.slice(container.endIndex);
+  }
+
+  // 5) MathJax <mjx-container> blocks
+  while ((container = findTagContainer(text, "mjx-container", null)) !== null) {
+    const dataTex = container.openTag.match(/data-tex\s*=\s*["']([^"']*)["']/i);
+    const tex = dataTex?.[1]
+      ? decodeTexSource(dataTex[1])
+      : extractAnnotationTex(container.inner);
+    text =
+      text.slice(0, container.index) +
+      wrapTexInDelimiters(tex) +
+      text.slice(container.endIndex);
+  }
+
+  // 6) math-tex / MathJax wrapper spans — unwrap and ensure delimiters
+  for (const classWord of ["math-tex", "MathJax"]) {
+    let wrapper: TagContainer | null;
+    while ((wrapper = findTagContainer(text, "span", classWord)) !== null) {
+      let inner = wrapper.inner.trim();
+      // Convert legacy $...$ delimiters (only safe inside a known math wrapper)
+      inner = inner.replace(/\$\$([\s\S]+?)\$\$/g, (_m, tex: string) =>
+        wrapTexInDelimiters(decodeTexSource(tex)),
+      );
+      inner = inner.replace(/\$([^$\n]+?)\$/g, (_m, tex: string) =>
+        wrapTexInDelimiters(decodeTexSource(tex)),
+      );
+      if (
+        !/^\\\([\s\S]*\\\)$/.test(inner) &&
+        !/^\\\[[\s\S]*\\\]$/.test(inner) &&
+        !/^\$\$[\s\S]*\$\$$/.test(inner) &&
+        (/\\[a-zA-Z{[]/.test(inner) || /\^\{|_\s*\{/.test(inner))
+      ) {
+        inner = wrapTexInDelimiters(inner);
+      }
+      text = text.slice(0, wrapper.index) + inner + text.slice(wrapper.endIndex);
+    }
+  }
+
+  return text;
+}
+
+/**
+ * Processes math regions to clean HTML garbage from inside LaTeX blocks.
+ * Finds all \( ... \), $$ ... $$, \[ ... \], and \begin{} ... \end{} regions
+ * and strips HTML tags that leaked inside them.
+ */
+function cleanMathRegions(input: string): string {
+  // Clean delimited math regions
+  let result = input.replace(MATH_DELIMITED_PATTERN, (match) => {
+    // Extract the delimiters and clean the content between them
+    if (match.startsWith("\\(") && match.endsWith("\\)")) {
+      const inner = match.slice(2, -2);
+      return `\\(${cleanLatexContent(inner)}\\)`;
+    }
+    if (match.startsWith("$$") && match.endsWith("$$")) {
+      const inner = match.slice(2, -2);
+      return `$$${cleanLatexContent(inner)}$$`;
+    }
+    if (match.startsWith("\\[") && match.endsWith("\\]")) {
+      const inner = match.slice(2, -2);
+      return `\\[${cleanLatexContent(inner)}\\]`;
+    }
+    return match;
+  });
+
+  // Clean bare LaTeX environment blocks
+  result = result.replace(LATEX_ENV_PATTERN, (match) => cleanLatexContent(match));
+
+  return result;
+}
+
+/**
+ * Master function for processing HTML content for export.
+ * - Extracts TeX from pre-rendered KaTeX/MathJax/MathML markup
+ * - Preserves math delimiters and wraps bare \begin..\end environments
+ * - Preserves safe HTML (p, table, sup, sub, strong, img, br, ...)
+ * - Decodes HTML entities to their Unicode equivalents
+ * - Strips remaining unsafe HTML
+ */
+function processHtmlForExport(input: string): string {
+  let text = decodeRepeatedHtmlEntities(input);
+
+  // Strip Office namespace tags early
+  text = stripOfficeTags(text);
+
+  // Replace pre-rendered math markup with clean delimited TeX BEFORE
+  // anything else so tag processing never sees rendered-math garbage
+  text = extractPreRenderedMath(text);
+
+  // Strip unsafe HTML (scripts, styles, comments) — math/tex scripts are kept
+  text = stripUnsafeHtml(text);
+
+  // Clean HTML garbage from inside math regions
+  text = cleanMathRegions(text);
+
+  // Preserve math-delimited regions as placeholders so tag processing never
+  // mangles backslash sequences near angle brackets
+  const mathRegions: string[] = [];
+  text = text.replace(MATH_DELIMITED_PATTERN, (match) => {
+    mathRegions.push(match);
+    return `__MATH_PLACEHOLDER_${mathRegions.length - 1}__`;
+  });
+
+  // Wrap bare LaTeX environments in display delimiters so they survive
+  // transport and render reliably in the target app
+  text = text.replace(LATEX_ENV_PATTERN, (match) => {
+    mathRegions.push(`\\[${match.trim()}\\]`);
+    return `__MATH_PLACEHOLDER_${mathRegions.length - 1}__`;
+  });
+
+  // Preserve <img> tags as placeholders
+  const imgTags: string[] = [];
+  text = text.replace(
+    /<img\s[^>]*src\s*=\s*"([^"]*)"[^>]*\/?>/gi,
+    (_match, src) => {
+      imgTags.push(`<img src="${fixProtocolRelativeUrl(src as string)}"/>`);
+      return `__IMG_PLACEHOLDER_${imgTags.length - 1}__`;
+    },
+  );
+
+  // Simplify HTML markup (strip attributes, lowercase tags, collapse spans)
+  text = simplifyHtmlMarkup(text);
+
+  // Remove unsafe tags, keep everything else (p, table, sup, sub, ...)
+  text = stripDisallowedTags(text);
+
+  // Normalize whitespace
+  text = normalizePlainText(text);
+
+  // Restore math placeholders
+  text = text.replace(
+    /__MATH_PLACEHOLDER_(\d+)__/g,
+    (_, idx) => mathRegions[parseInt(idx as string)] ?? "",
+  );
+
+  // Restore img placeholders
+  text = text.replace(
+    /__IMG_PLACEHOLDER_(\d+)__/g,
+    (_, idx) => imgTags[parseInt(idx as string)] ?? "",
+  );
+
+  return text;
 }
 
 function stripUnsafeHtml(input: string): string {
   return input
-    .replace(/<script\b[^<>]*>[\s\S]*?<\/script>/gi, " ")
+    // Keep math/tex script blocks — they are extracted as TeX later
+    .replace(
+      /<script\b(?![^>]*type\s*=\s*["'](?:math\/tex|application\/tex|text\/latex|math\/latex))[^<>]*>[\s\S]*?<\/script>/gi,
+      " ",
+    )
     .replace(/<style\b[^<>]*>[\s\S]*?<\/style>/gi, " ")
     .replace(/<!--[\s\S]*?-->/g, " ");
 }
@@ -233,35 +641,13 @@ function decodeRepeatedHtmlEntities(input: string): string {
   return text;
 }
 
-function normalizeHtmlContent(input: string): string {
-  return normalizePlainText(simplifyHtmlMarkup(stripUnsafeHtml(decodeRepeatedHtmlEntities(input))));
-}
-
+/**
+ * Processes question/option text for export: extracts TeX from pre-rendered
+ * math markup, preserves math delimiters and safe HTML (tables, sup/sub,
+ * images), decodes entities, strips remaining unsafe HTML.
+ */
 function stripHtml(input: string): string {
-  const text = normalizeHtmlContent(input);
-
-  // Preserve <img> tags so image-based options render correctly in examprep
-  // Replace with placeholders, strip everything else, then restore
-  const imgTags: string[] = [];
-  const withPlaceholders = text.replace(
-    /<img\s[^>]*src\s*=\s*"([^"]*)"[^>]*\/?>/gi,
-    (match, src) => {
-      // Fix protocol-relative URLs (//cdn.testbook.com/... → https://cdn.testbook.com/...)
-      const fixedSrc = (src as string).startsWith("//")
-        ? `https:${src}`
-        : (src as string);
-      imgTags.push(`<img src="${fixedSrc}"/>`);
-      return `__IMG_PLACEHOLDER_${imgTags.length - 1}__`;
-    },
-  );
-
-  const stripped = normalizePlainText(stripTags(withPlaceholders));
-
-  // Restore img tags
-  return stripped.replace(
-    /__IMG_PLACEHOLDER_(\d+)__/g,
-    (_, idx) => imgTags[parseInt(idx as string)] ?? "",
-  );
+  return processHtmlForExport(input);
 }
 
 function collectSolutionText(value: unknown, seen = new Set<object>()): string[] {
@@ -306,7 +692,7 @@ function combineTextCandidates(candidates: unknown[]): string {
   const parts: string[] = [];
 
   for (const candidate of candidates.flatMap((item) => collectSolutionText(item))) {
-    const text = normalizeHtmlContent(candidate);
+    const text = processHtmlForExport(candidate);
     if (!text || seen.has(text)) continue;
     seen.add(text);
     parts.push(text);
@@ -325,7 +711,7 @@ function extractSolutionText(answerObj: AnyObject): string {
       answerObj.explanation,
       answerObj.explanations,
       answerObj.explanationText,
-    ]) || normalizeHtmlContent(getString(answerObj.val))
+    ]) || processHtmlForExport(getString(answerObj.val))
   );
 }
 
@@ -337,7 +723,8 @@ function extractQuestionText(en: AnyObject): string {
     getString(en.paragraph);
   const questionText = getString(en.value);
 
-  return normalizeHtmlContent(compText ? `${compText} ${questionText}` : questionText);
+  const raw = compText ? `${compText} ${questionText}` : questionText;
+  return processHtmlForExport(raw);
 }
 
 const DEVANAGARI_START = 0x0900;
@@ -621,7 +1008,6 @@ export function mapExportRows(
       const questionId = getString(question._id);
       const answerInfo = answersLookup[questionId];
 
-      const rawQuestionText = extractQuestionText(en);
       const rawOptA = extractOptionValue(options[0]);
       const rawOptB = extractOptionValue(options[1]);
       const rawOptC = extractOptionValue(options[2]);
@@ -629,10 +1015,11 @@ export function mapExportRows(
 
       // Skip questions that don't have English content
       // (e.g., Hindi-only questions in bilingual papers like SSC GD)
-      if (!hasEnglishContent([rawQuestionText, rawOptA, rawOptB, rawOptC, rawOptD])) {
+      if (!hasEnglishContent([getString(en.value), rawOptA, rawOptB, rawOptC, rawOptD])) {
         continue;
       }
 
+      const questionText = extractQuestionText(en);
       const optA = stripHtml(rawOptA);
       const optB = stripHtml(rawOptB);
       const optC = stripHtml(rawOptC);
@@ -652,7 +1039,7 @@ export function mapExportRows(
 
       rows.push({
         question_number: index,
-        question_text: rawQuestionText,
+        question_text: questionText,
         option_a: optA,
         option_b: optB,
         option_c: optC,
