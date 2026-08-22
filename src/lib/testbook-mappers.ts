@@ -31,7 +31,6 @@ export type ExportRow = {
   solution_text: string;
   topic_subject: string;
   topic_category: string;
-  topic_type: string;
   difficulty: string;
   marks: number | string;
   negative_marks: number | string;
@@ -663,7 +662,6 @@ export function mapExportRows(
         solution_text: answerInfo?.solutionText || "",
         topic_subject: topicSubject,
         topic_category: topicCategory,
-        topic_type: questionTopic.topicType,
         difficulty: "",
         marks,
         negative_marks: negMarksRaw ?? "",

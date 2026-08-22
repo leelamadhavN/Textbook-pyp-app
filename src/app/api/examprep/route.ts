@@ -17,8 +17,6 @@ import {
   createSubject,
   listChapters,
   createChapter,
-  listTopics,
-  createTopic,
   type CsvQuestion,
   type PaperInput,
 } from "@/lib/examprep-api";
@@ -132,7 +130,6 @@ async function downloadPaperQuestions(
     solution_text: row.solution_text || "",
     topic_subject: row.topic_subject || "",
     topic_category: row.topic_category || "",
-    topic_type: row.topic_type || "",
     difficulty: row.difficulty || undefined,
     marks: typeof row.marks === "number" ? row.marks : undefined,
     negative_marks: typeof row.negative_marks === "number" ? row.negative_marks : undefined,
@@ -521,7 +518,6 @@ async function handleUploadPaper(req: UploadPaperRequest) {
       // ── Resolve subjects, chapters, and topics ──────────────
       const subjectCache = new Map<string, string>(); // name → id
       const chapterCache = new Map<string, string>(); // "subjectId::chapterName" → id
-      const topicCache = new Map<string, string>();   // "chapterId::topicName" → id
 
       // Fetch existing subjects for this exam once
       let existingSubjects = await listSubjects(examId);
@@ -532,7 +528,6 @@ async function handleUploadPaper(req: UploadPaperRequest) {
       for (const q of questions) {
         const subjectName = q.topic_subject?.trim();
         const categoryName = q.topic_category?.trim();
-        const typeName = q.topic_type?.trim();
 
         if (!subjectName) continue;
 
@@ -577,54 +572,19 @@ async function handleUploadPaper(req: UploadPaperRequest) {
           }
         }
 
-        // 3. Ensure topic exists under chapter (fallback: use category name if type is empty)
-        const topicName = typeName || categoryName;
-        const topicKey = `${chapterId}::${topicName.toLowerCase()}`;
-        let topicId = topicCache.get(topicKey);
-        if (!topicId) {
-          if (!topicCache.has(`__fetched__${chapterId}`)) {
-            try {
-              const existingTopics = await listTopics(chapterId);
-              for (const t of existingTopics) {
-                topicCache.set(`${chapterId}::${t.name.toLowerCase()}`, t.id);
-              }
-            } catch {
-              console.warn(`[upload] listTopics failed for chapterId=${chapterId}, will create fresh`);
-            }
-            topicCache.set(`__fetched__${chapterId}`, "1");
-          }
-          topicId = topicCache.get(topicKey);
-        }
-        if (!topicId) {
-          console.log(`[upload] Creating topic: name="${topicName}", chapterId="${chapterId}" (typeName="${typeName}", categoryName="${categoryName}")`);
-          try {
-            const newTopic = await createTopic(topicName, chapterId);
-            topicId = newTopic.id;
-            topicCache.set(topicKey, topicId);
-            console.log(`[upload] Topic created: id="${topicId}", name="${newTopic.name}"`);
-          } catch (topicErr) {
-            console.error(`[upload] createTopic FAILED: name="${topicName}", chapterId="${chapterId}", error="${topicErr instanceof Error ? topicErr.message : topicErr}"`);
-            // Don't throw — skip this topic but continue importing
-          }
-        }
-        if (topicId) {
-          q.topic_id = topicId;
-        }
       }
-      console.log(`[upload] Resolution complete for "${paperTitle}": ${subjectCache.size} subjects, ${chapterCache.size - [...chapterCache.keys()].filter(k => k.startsWith('__fetched__')).length} chapters, ${topicCache.size - [...topicCache.keys()].filter(k => k.startsWith('__fetched__')).length} topics`);
+      console.log(`[upload] Resolution complete for "${paperTitle}": ${subjectCache.size} subjects, ${chapterCache.size - [...chapterCache.keys()].filter(k => k.startsWith('__fetched__')).length} chapters`);
     } else {
-      console.log(`[upload] Skipping subject/topic resolution — no examId provided for "${paperTitle}"`);
+      console.log(`[upload] Skipping subject/chapter resolution — no examId provided for "${paperTitle}"`);
     }
 
-    // ── Import questions individually (create-question properly stores topic_id) ──
+    // ── Import questions ──
     let imported = 0;
-    let withTopic = 0;
     const importErrors: string[] = [];
     await processWithConcurrency(questions, 10, async (q, idx) => {
       try {
         await createQuestion(q, paperInstanceId);
         imported++;
-        if (q.topic_id) withTopic++;
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Unknown";
         importErrors.push(`Q${q.question_number}: ${msg}`);
@@ -632,10 +592,7 @@ async function handleUploadPaper(req: UploadPaperRequest) {
       }
     });
 
-    console.log(`[upload] Paper "${paperTitle}": ${imported}/${questions.length} questions imported, ${withTopic} with topic_id`);
-    if (imported > 0 && withTopic === 0) {
-      console.warn(`[upload] ⚠ ZERO questions have topic_id set — resolution may have failed or examId is missing`);
-    }
+    console.log(`[upload] Paper "${paperTitle}": ${imported}/${questions.length} questions imported`);
 
     return NextResponse.json({
       success: true,

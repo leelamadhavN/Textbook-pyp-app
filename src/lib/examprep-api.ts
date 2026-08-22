@@ -261,7 +261,6 @@ export interface CsvQuestion {
   negative_marks?: number;
   topic_subject?: string;
   topic_category?: string;
-  topic_type?: string;
   subject_id?: string;
   topic_id?: string;
 }
@@ -309,10 +308,6 @@ export async function createQuestion(
   if (question.topic_id) body.topic_id = question.topic_id;
   if (question.topic_subject) body.topic_subject = question.topic_subject;
   if (question.topic_category) body.topic_category = question.topic_category;
-
-  if (question.topic_id) {
-    console.log(`[createQuestion] Q${question.question_number}: sending topic_id="${question.topic_id}"`);
-  }
 
   const { ok, data } = await examprepFetch("/api/admin", body);
   if (!ok) throw new Error(`Failed to create question: ${JSON.stringify(data)}`);
