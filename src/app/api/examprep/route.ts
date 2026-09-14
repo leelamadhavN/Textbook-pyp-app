@@ -24,6 +24,7 @@ import {
 // ─── Request types ───────────────────────────────────────────
 
 interface SetupRequest {
+  baseUrl: string;
   action: "setup" | "setup-batch";
   examName: string;
   superGroupName?: string;
@@ -35,12 +36,14 @@ interface SetupRequest {
 }
 
 interface EnsureExamRequest {
+  baseUrl: string;
   action: "ensure-exam";
   examName: string;
   superGroupName?: string;
 }
 
 interface EnsurePaperTypeRequest {
+  baseUrl: string;
   action: "ensure-paper-type";
   examId: string;
   name: string;
@@ -48,6 +51,7 @@ interface EnsurePaperTypeRequest {
 }
 
 interface EnsureInstanceRequest {
+  baseUrl: string;
   action: "ensure-instance";
   paperTypeId: string;
   paperId: string;
@@ -56,6 +60,7 @@ interface EnsureInstanceRequest {
 }
 
 interface UploadPaperRequest {
+  baseUrl: string;
   action: "upload-paper";
   paperId: string;
   authToken: string;
@@ -197,8 +202,8 @@ export async function POST(request: NextRequest) {
 // ─── Individual ensure actions (for live progress) ──────────
 
 async function handleEnsureExam(req: EnsureExamRequest) {
-  await loginExamprep();
-  const exams = await listExams();
+  await loginExamprep(req.baseUrl);
+  const exams = await listExams(req.baseUrl);
   const existing = exams.find((e) => e.name.toLowerCase() === req.examName.toLowerCase());
 
   if (existing) {
@@ -208,26 +213,26 @@ async function handleEnsureExam(req: EnsureExamRequest) {
   const category = req.superGroupName
     ? mapSuperGroupToCategory(req.superGroupName)
     : "other";
-  const examId = await createExam(req.examName, category);
+  const examId = await createExam(req.baseUrl, req.examName, category);
   return NextResponse.json({ success: true, examId, status: "created" });
 }
 
 async function handleEnsurePaperType(req: EnsurePaperTypeRequest) {
-  await loginExamprep();
-  const existing = await listPaperTypes(req.examId);
+  await loginExamprep(req.baseUrl);
+  const existing = await listPaperTypes(req.baseUrl, req.examId);
   const match = existing.find((pt) => pt.name.toLowerCase() === req.name.toLowerCase());
 
   if (match) {
     return NextResponse.json({ success: true, paperTypeId: match.id, status: "exists" });
   }
 
-  const paperTypeId = await createPaperType(req.examId, req.name, req.stage);
+  const paperTypeId = await createPaperType(req.baseUrl, req.examId, req.name, req.stage);
   return NextResponse.json({ success: true, paperTypeId, status: "created" });
 }
 
 async function handleEnsureInstance(req: EnsureInstanceRequest) {
-  await loginExamprep();
-  const existing = await listPaperInstances(req.paperTypeId);
+  await loginExamprep(req.baseUrl);
+  const existing = await listPaperInstances(req.baseUrl, req.paperTypeId);
   const match = existing.find(
     (pi) => pi.display_name.toLowerCase() === req.displayName.toLowerCase(),
   );
@@ -243,7 +248,7 @@ async function handleEnsureInstance(req: EnsureInstanceRequest) {
     });
   }
 
-  const instanceId = await createPaperInstance(req.paperTypeId, req.year, req.displayName);
+  const instanceId = await createPaperInstance(req.baseUrl, req.paperTypeId, req.year, req.displayName);
   return NextResponse.json({
     success: true,
     instanceId,
@@ -278,7 +283,7 @@ async function handleSetupBatch(req: SetupRequest) {
   }
 
   console.log(`[setup-batch] Logging in to examprep...`);
-  await loginExamprep();
+  await loginExamprep(req.baseUrl);
   console.log(`[setup-batch] Login complete.`);
 
   const category = superGroupName
@@ -291,7 +296,7 @@ async function handleSetupBatch(req: SetupRequest) {
   let examStatus: "created" | "exists";
   try {
     console.log(`[setup-batch] Listing existing exams...`);
-    const exams = await listExams();
+    const exams = await listExams(req.baseUrl);
     console.log(`[setup-batch] Found ${exams.length} existing exams.`);
     const existing = exams.find((e) => e.name.toLowerCase() === examName.toLowerCase());
     if (existing) {
@@ -300,7 +305,7 @@ async function handleSetupBatch(req: SetupRequest) {
       console.log(`[setup-batch] Exam already exists: id=${examId}`);
     } else {
       console.log(`[setup-batch] Creating new exam: name="${examName}", category="${category}"`);
-      examId = await createExam(examName, category);
+      examId = await createExam(req.baseUrl, examName, category);
       examStatus = "created";
       console.log(`[setup-batch] Exam created: id=${examId}`);
     }
@@ -328,7 +333,7 @@ async function handleSetupBatch(req: SetupRequest) {
 
     try {
       console.log(`[setup-batch]   Listing existing paper types for exam ${examId}...`);
-      const existingPTs = await listPaperTypes(examId);
+      const existingPTs = await listPaperTypes(req.baseUrl, examId);
       console.log(`[setup-batch]   Found ${existingPTs.length} existing paper types: ${existingPTs.map(pt => pt.name).join(', ')}`);
       const match = existingPTs.find(
         (e) => e.name.toLowerCase() === formattedPtName.toLowerCase(),
@@ -342,7 +347,7 @@ async function handleSetupBatch(req: SetupRequest) {
         const durs = ptGroup.papers.map((p) => p.durationMinutes ?? 0).filter((d) => d > 0);
         createdDuration = durs.length > 0 ? Math.max(...durs) : 180;
         console.log(`[setup-batch]   Creating paper type: "${formattedPtName}", stage="${ptGroup.stage}", duration=${createdDuration}`);
-        ptId = await createPaperType(examId, formattedPtName, ptGroup.stage, createdDuration);
+        ptId = await createPaperType(req.baseUrl, examId, formattedPtName, ptGroup.stage, createdDuration);
         ptStatus = "created";
         console.log(`[setup-batch]   Paper type created: id=${ptId}`);
       }
@@ -380,7 +385,7 @@ async function handleSetupBatch(req: SetupRequest) {
       }> = [];
       try {
         console.log(`[setup-batch]   Listing existing instances for paper type ${ptId}...`);
-        existingInstances = await listPaperInstances(ptId);
+        existingInstances = await listPaperInstances(req.baseUrl, ptId);
         console.log(`[setup-batch]   Found ${existingInstances.length} existing instances`);
       } catch (err) {
         console.error(`[setup-batch]   Failed to list existing instances:`, err);
@@ -409,7 +414,7 @@ async function handleSetupBatch(req: SetupRequest) {
         } else {
           try {
             console.log(`[setup-batch]   [${idx + 1}/${assigned.length}] Creating instance: "${a.displayName}" (year=${a.year}, session=${a.session}, shift=${a.shift})`);
-            const piId = await createPaperInstance(
+            const piId = await createPaperInstance(req.baseUrl, 
               ptId!,
               a.year,
               a.displayName,
@@ -511,7 +516,7 @@ async function handleUploadPaper(req: UploadPaperRequest) {
   }
 
   try {
-    await loginExamprep();
+    await loginExamprep(req.baseUrl);
 
     if (examId) {
       console.log(`[upload] Resolving subjects/chapters/topics for examId=${examId}, paper="${paperTitle}"`);
@@ -520,7 +525,7 @@ async function handleUploadPaper(req: UploadPaperRequest) {
       const chapterCache = new Map<string, string>(); // "subjectId::chapterName" → id
 
       // Fetch existing subjects for this exam once
-      let existingSubjects = await listSubjects(examId);
+      let existingSubjects = await listSubjects(req.baseUrl, examId);
       for (const s of existingSubjects) {
         subjectCache.set(s.name.toLowerCase(), s.id);
       }
@@ -534,7 +539,7 @@ async function handleUploadPaper(req: UploadPaperRequest) {
         // 1. Ensure subject exists
         let subjectId = subjectCache.get(subjectName.toLowerCase());
         if (!subjectId) {
-          const newSubject = await createSubject(subjectName, examId);
+          const newSubject = await createSubject(req.baseUrl, subjectName, examId);
           subjectId = newSubject.id;
           subjectCache.set(subjectName.toLowerCase(), subjectId);
         }
@@ -549,7 +554,7 @@ async function handleUploadPaper(req: UploadPaperRequest) {
           // Fetch chapters for this subject (cache on first access)
           if (!chapterCache.has(`__fetched__${subjectId}`)) {
             try {
-              const existingChapters = await listChapters(subjectId);
+              const existingChapters = await listChapters(req.baseUrl, subjectId);
               for (const c of existingChapters) {
                 chapterCache.set(`${subjectId}::${c.name.toLowerCase()}`, c.id);
               }
@@ -562,7 +567,7 @@ async function handleUploadPaper(req: UploadPaperRequest) {
         }
         if (!chapterId) {
           try {
-            const newChapter = await createChapter(categoryName, subjectId);
+            const newChapter = await createChapter(req.baseUrl, categoryName, subjectId);
             chapterId = newChapter.id;
             chapterCache.set(chapterKey, chapterId);
             console.log(`[upload] Chapter created: name="${newChapter.name}", id="${chapterId}"`);
@@ -583,7 +588,7 @@ async function handleUploadPaper(req: UploadPaperRequest) {
     const importErrors: string[] = [];
     await processWithConcurrency(questions, 10, async (q, idx) => {
       try {
-        await createQuestion(q, paperInstanceId);
+        await createQuestion(req.baseUrl, q, paperInstanceId);
         imported++;
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Unknown";

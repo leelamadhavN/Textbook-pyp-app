@@ -178,6 +178,36 @@ export default function Home() {
   const [bulkStatus, setBulkStatus] = useState("");
 
   // Upload to examprep state
+
+  const [devUrl, setDevUrl] = useState("https://examprep-web-mu.vercel.app");
+  const [prodUrl, setProdUrl] = useState("https://tryexamprep.com");
+  const [targetEnv, setTargetEnv] = useState<"dev" | "prod" | "">("");
+
+  useEffect(() => {
+    const savedDev = localStorage.getItem("devUrl");
+    if (savedDev) setDevUrl(savedDev);
+    const savedProd = localStorage.getItem("prodUrl");
+    if (savedProd) setProdUrl(savedProd);
+    const savedEnv = localStorage.getItem("targetEnv") as "dev" | "prod" | "";
+    if (savedEnv) setTargetEnv(savedEnv);
+  }, []);
+
+  const handleDevUrlChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setDevUrl(e.target.value);
+    localStorage.setItem("devUrl", e.target.value);
+  };
+
+  const handleProdUrlChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setProdUrl(e.target.value);
+    localStorage.setItem("prodUrl", e.target.value);
+  };
+
+  const handleEnvChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const env = e.target.value as "dev" | "prod" | "";
+    setTargetEnv(env);
+    localStorage.setItem("targetEnv", env);
+  };
+
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<UploadProgressState | null>(null);
   const [showUploadPanel, setShowUploadPanel] = useState(false);
@@ -525,6 +555,26 @@ export default function Home() {
   const handleAttemptAndUpload = async () => {
     if (!selectedRoleId || !selectedRole) return;
 
+    let baseUrl = "";
+    if (targetEnv === "dev" && devUrl) baseUrl = devUrl;
+    else if (targetEnv === "prod" && prodUrl) baseUrl = prodUrl;
+    
+    if (!baseUrl) {
+      if (devUrl && prodUrl) {
+         setError("Please select a Target Environment (Dev or Prod) before uploading.");
+         return;
+      } else if (devUrl) {
+         baseUrl = devUrl;
+         setTargetEnv("dev");
+      } else if (prodUrl) {
+         baseUrl = prodUrl;
+         setTargetEnv("prod");
+      } else {
+         setError("Please specify at least one environment URL.");
+         return;
+      }
+    }
+
     setUploading(true);
     setShowUploadPanel(true);
     setError("");
@@ -643,6 +693,7 @@ export default function Home() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          baseUrl,
           action: "setup-batch",
           examName: selectedRole.title,
           superGroupName: selectedSuperGroup?.title ?? "",
@@ -759,6 +810,7 @@ export default function Home() {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
+                baseUrl,
                 action: "upload-paper",
                 paperId: inst.paperId,
                 authToken,
@@ -999,6 +1051,41 @@ export default function Home() {
               </div>
             </div>
           )}
+        </section>
+
+        <section className={styles.controls}>
+          <label className={styles.label}>
+            Dev Link
+            <input
+              type="url"
+              className={styles.tokenInput}
+              style={{ padding: "8px", marginTop: "4px" }}
+              value={devUrl}
+              onChange={handleDevUrlChange}
+            />
+          </label>
+          <label className={styles.label}>
+            Prod Link
+            <input
+              type="url"
+              className={styles.tokenInput}
+              style={{ padding: "8px", marginTop: "4px" }}
+              value={prodUrl}
+              onChange={handleProdUrlChange}
+            />
+          </label>
+          <label className={styles.label}>
+            Target Env
+            <select
+              className={styles.select}
+              value={targetEnv}
+              onChange={handleEnvChange}
+            >
+              <option value="">Select Env</option>
+              {devUrl && <option value="dev">Development</option>}
+              {prodUrl && <option value="prod">Production</option>}
+            </select>
+          </label>
         </section>
 
         <section className={styles.controls}>

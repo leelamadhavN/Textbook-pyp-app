@@ -1,11 +1,11 @@
-const EXAMPPREP_BASE_URL = "https://examprep-web-mu.vercel.app";
 const EXAMPPREP_EMAIL = "sagar.butla@gmail.com";
 const EXAMPPREP_PASSWORD = "12345678";
 
-let authCookieHeader = "";
-let authCookies: string[] = [];
+const authCookieHeaders = new Map<string, string>();
+const authCookiesMap = new Map<string, string[]>();
 
 async function examprepFetch(
+  baseUrl: string,
   path: string,
   body: Record<string, unknown>,
   retryOn401 = true,
@@ -14,11 +14,12 @@ async function examprepFetch(
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
+  const authCookieHeader = authCookieHeaders.get(baseUrl);
   if (authCookieHeader) {
     headers["Cookie"] = authCookieHeader;
   }
 
-  const url = `${EXAMPPREP_BASE_URL}${path}`;
+  const url = `${baseUrl}${path}`;
   const action = (body.action as string) ?? "unknown";
 
   let lastError: unknown;
@@ -46,20 +47,20 @@ async function examprepFetch(
 
     if (res.status === 401 && retryOn401) {
       console.warn(`[examprepFetch] Got 401 for ${action} ${path}, re-logging in...`);
-      authCookieHeader = "";
-      authCookies = [];
-      const loggedIn = await loginExamprep();
+      authCookieHeaders.delete(baseUrl);
+      authCookiesMap.delete(baseUrl);
+      const loggedIn = await loginExamprep(baseUrl);
       if (loggedIn) {
         console.log(`[examprepFetch] Re-login successful, retrying ${action}...`);
-        return examprepFetch(path, body, false);
+        return examprepFetch(baseUrl, path, body, false);
       }
       console.error(`[examprepFetch] Re-login failed for ${action}`);
     }
 
     const setCookie = res.headers.getSetCookie?.() ?? [];
     if (setCookie.length > 0) {
-      authCookies = setCookie;
-      authCookieHeader = authCookies.map((c) => c.split(";")[0]).join("; ");
+      authCookiesMap.set(baseUrl, setCookie);
+      authCookieHeaders.set(baseUrl, setCookie.map((c) => c.split(";")[0]).join("; "));
     }
 
     let data: unknown;
@@ -86,9 +87,8 @@ async function examprepFetch(
   };
 }
 
-export async function loginExamprep(): Promise<boolean> {
-  const { ok } = await examprepFetch(
-    "/api/auth",
+export async function loginExamprep(baseUrl: string): Promise<boolean> {
+  const { ok } = await examprepFetch(baseUrl, "/api/auth",
     {
       action: "login",
       email: EXAMPPREP_EMAIL,
@@ -99,9 +99,9 @@ export async function loginExamprep(): Promise<boolean> {
   return ok;
 }
 
-async function ensureLogin(): Promise<void> {
-  if (authCookieHeader) return;
-  const ok = await loginExamprep();
+async function ensureLogin(baseUrl: string): Promise<void> {
+  if (authCookieHeaders.has(baseUrl)) return;
+  const ok = await loginExamprep(baseUrl);
   if (!ok) throw new Error("Failed to login to examprep");
 }
 
@@ -120,9 +120,9 @@ export function mapSuperGroupToCategory(superGroupName: string): string {
   return "other";
 }
 
-export async function listExams(): Promise<Array<{ id: string; name: string; slug: string }>> {
-  await ensureLogin();
-  const { ok, data } = await examprepFetch("/api/admin", { action: "list-exams" });
+export async function listExams(baseUrl: string): Promise<Array<{ id: string; name: string; slug: string }>> {
+  await ensureLogin(baseUrl);
+  const { ok, data } = await examprepFetch(baseUrl, "/api/admin", { action: "list-exams" });
   if (!ok) throw new Error("Failed to list exams");
   return ((data as Record<string, unknown>)?.exams as Array<Record<string, unknown>>)?.map((e) => ({
     id: e.id as string,
@@ -131,9 +131,9 @@ export async function listExams(): Promise<Array<{ id: string; name: string; slu
   })) ?? [];
 }
 
-export async function createExam(name: string, category = "other"): Promise<string> {
-  await ensureLogin();
-  const { ok, data } = await examprepFetch("/api/admin", {
+export async function createExam(baseUrl: string, name: string, category = "other"): Promise<string> {
+  await ensureLogin(baseUrl);
+  const { ok, data } = await examprepFetch(baseUrl, "/api/admin", {
     action: "create-exam",
     name,
     category,
@@ -145,10 +145,11 @@ export async function createExam(name: string, category = "other"): Promise<stri
 }
 
 export async function listPaperTypes(
+  baseUrl: string,
   examId: string,
 ): Promise<Array<{ id: string; name: string; stage: string }>> {
-  await ensureLogin();
-  const { ok, data } = await examprepFetch("/api/admin", {
+  await ensureLogin(baseUrl);
+  const { ok, data } = await examprepFetch(baseUrl, "/api/admin", {
     action: "list-paper-types",
     exam_id: examId,
   });
@@ -165,13 +166,14 @@ export async function listPaperTypes(
 }
 
 export async function createPaperType(
+  baseUrl: string,
   examId: string,
   name: string,
   stage: string,
   durationMinutes = 180,
 ): Promise<string> {
-  await ensureLogin();
-  const { ok, data } = await examprepFetch("/api/admin", {
+  await ensureLogin(baseUrl);
+  const { ok, data } = await examprepFetch(baseUrl, "/api/admin", {
     action: "create-paper-type",
     exam_id: examId,
     name,
@@ -187,6 +189,7 @@ export async function createPaperType(
 }
 
 export async function updatePaperType(
+  baseUrl: string,
   id: string,
   data: Partial<{
     duration_minutes: number;
@@ -194,8 +197,8 @@ export async function updatePaperType(
     total_questions: number;
   }>,
 ): Promise<void> {
-  await ensureLogin();
-  const { ok } = await examprepFetch("/api/admin", {
+  await ensureLogin(baseUrl);
+  const { ok } = await examprepFetch(baseUrl, "/api/admin", {
     action: "update-paper-type",
     id,
     ...data,
@@ -204,10 +207,11 @@ export async function updatePaperType(
 }
 
 export async function listPaperInstances(
+  baseUrl: string,
   paperTypeId: string,
 ): Promise<Array<{ id: string; year: number; session: string | null; shift: string | null; display_name: string }>> {
-  await ensureLogin();
-  const { ok, data } = await examprepFetch("/api/admin", {
+  await ensureLogin(baseUrl);
+  const { ok, data } = await examprepFetch(baseUrl, "/api/admin", {
     action: "list-paper-instances",
     paper_type_id: paperTypeId,
   });
@@ -226,13 +230,14 @@ export async function listPaperInstances(
 }
 
 export async function createPaperInstance(
+  baseUrl: string,
   paperTypeId: string,
   year: number,
   displayName: string,
   session?: string | null,
   shift?: string | null,
 ): Promise<string> {
-  await ensureLogin();
+  await ensureLogin(baseUrl);
   const body: Record<string, unknown> = {
     action: "create-paper-instance",
     paper_type_id: paperTypeId,
@@ -241,7 +246,7 @@ export async function createPaperInstance(
   };
   if (session) body.session = session;
   if (shift) body.shift = shift;
-  const { ok, data } = await examprepFetch("/api/admin", body);
+  const { ok, data } = await examprepFetch(baseUrl, "/api/admin", body);
   if (!ok) throw new Error(`Failed to create paper instance: ${JSON.stringify(data)}`);
   return ((data as Record<string, unknown>)?.paper_instance as Record<string, unknown>)
     ?.id as string;
@@ -271,11 +276,12 @@ export interface BulkImportResult {
 }
 
 export async function bulkImportQuestions(
+  baseUrl: string,
   questions: CsvQuestion[],
   paperInstanceId: string,
 ): Promise<BulkImportResult> {
-  await ensureLogin();
-  const { ok, data } = await examprepFetch("/api/admin", {
+  await ensureLogin(baseUrl);
+  const { ok, data } = await examprepFetch(baseUrl, "/api/admin", {
     action: "bulk-import-questions",
     questions,
     paper_instance_id: paperInstanceId,
@@ -285,10 +291,11 @@ export async function bulkImportQuestions(
 }
 
 export async function createQuestion(
+  baseUrl: string,
   question: CsvQuestion,
   paperInstanceId: string,
 ): Promise<string> {
-  await ensureLogin();
+  await ensureLogin(baseUrl);
   const body: Record<string, unknown> = {
     action: "create-question",
     paper_instance_id: paperInstanceId,
@@ -309,7 +316,7 @@ export async function createQuestion(
   if (question.topic_subject) body.topic_subject = question.topic_subject;
   if (question.topic_category) body.topic_category = question.topic_category;
 
-  const { ok, data } = await examprepFetch("/api/admin", body);
+  const { ok, data } = await examprepFetch(baseUrl, "/api/admin", body);
   if (!ok) throw new Error(`Failed to create question: ${JSON.stringify(data)}`);
   return ((data as Record<string, unknown>)?.question as Record<string, unknown>)?.id as string;
 }
@@ -334,9 +341,9 @@ export interface ExamprepTopic {
   name: string;
 }
 
-export async function listSubjects(examId: string): Promise<ExamprepSubject[]> {
-  await ensureLogin();
-  const { ok, data } = await examprepFetch("/api/admin", {
+export async function listSubjects(baseUrl: string, examId: string): Promise<ExamprepSubject[]> {
+  await ensureLogin(baseUrl);
+  const { ok, data } = await examprepFetch(baseUrl, "/api/admin", {
     action: "list-subjects",
     exam_id: examId,
   });
@@ -348,9 +355,9 @@ export async function listSubjects(examId: string): Promise<ExamprepSubject[]> {
   })) ?? [];
 }
 
-export async function createSubject(name: string, examId: string): Promise<ExamprepSubject> {
-  await ensureLogin();
-  const { ok, data } = await examprepFetch("/api/admin", {
+export async function createSubject(baseUrl: string, name: string, examId: string): Promise<ExamprepSubject> {
+  await ensureLogin(baseUrl);
+  const { ok, data } = await examprepFetch(baseUrl, "/api/admin", {
     action: "create-subject",
     name,
     exam_id: examId,
@@ -360,9 +367,9 @@ export async function createSubject(name: string, examId: string): Promise<Examp
   return { id: subject.id as string, exam_id: subject.exam_id as string, name: subject.name as string };
 }
 
-export async function listChapters(subjectId: string): Promise<ExamprepChapter[]> {
-  await ensureLogin();
-  const { ok, data } = await examprepFetch("/api/admin", {
+export async function listChapters(baseUrl: string, subjectId: string): Promise<ExamprepChapter[]> {
+  await ensureLogin(baseUrl);
+  const { ok, data } = await examprepFetch(baseUrl, "/api/admin", {
     action: "list-chapters",
     subject_id: subjectId,
   });
@@ -374,9 +381,9 @@ export async function listChapters(subjectId: string): Promise<ExamprepChapter[]
   })) ?? [];
 }
 
-export async function createChapter(name: string, subjectId: string): Promise<ExamprepChapter> {
-  await ensureLogin();
-  const { ok, data } = await examprepFetch("/api/admin", {
+export async function createChapter(baseUrl: string, name: string, subjectId: string): Promise<ExamprepChapter> {
+  await ensureLogin(baseUrl);
+  const { ok, data } = await examprepFetch(baseUrl, "/api/admin", {
     action: "create-chapter",
     name,
     subject_id: subjectId,
@@ -386,9 +393,9 @@ export async function createChapter(name: string, subjectId: string): Promise<Ex
   return { id: chapter.id as string, subject_id: chapter.subject_id as string, name: chapter.name as string };
 }
 
-export async function listTopics(chapterId: string): Promise<ExamprepTopic[]> {
-  await ensureLogin();
-  const { ok, data } = await examprepFetch("/api/admin", {
+export async function listTopics(baseUrl: string, chapterId: string): Promise<ExamprepTopic[]> {
+  await ensureLogin(baseUrl);
+  const { ok, data } = await examprepFetch(baseUrl, "/api/admin", {
     action: "list-topics",
     chapter_id: chapterId,
   });
@@ -400,9 +407,9 @@ export async function listTopics(chapterId: string): Promise<ExamprepTopic[]> {
   })) ?? [];
 }
 
-export async function createTopic(name: string, chapterId: string): Promise<ExamprepTopic> {
-  await ensureLogin();
-  const { ok, data } = await examprepFetch("/api/admin", {
+export async function createTopic(baseUrl: string, name: string, chapterId: string): Promise<ExamprepTopic> {
+  await ensureLogin(baseUrl);
+  const { ok, data } = await examprepFetch(baseUrl, "/api/admin", {
     action: "create-topic",
     name,
     chapter_id: chapterId,
