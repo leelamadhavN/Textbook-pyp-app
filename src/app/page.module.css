@@ -425,10 +425,6 @@
   background: #fff1f1;
   border-radius: 4px;
   padding: 1px 5px;
-  max-width: 300px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .uploadCurrentStep {

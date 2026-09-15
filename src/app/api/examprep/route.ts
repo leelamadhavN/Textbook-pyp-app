@@ -10,6 +10,7 @@ import {
   listPaperInstances,
   createPaperInstance,
   createQuestion,
+  bulkImportQuestions,
   mapSuperGroupToCategory,
   assignSessionsAndShifts,
   formatPaperTypeName,
@@ -585,17 +586,16 @@ async function handleUploadPaper(req: UploadPaperRequest) {
 
     // ── Import questions ──
     let imported = 0;
-    const importErrors: string[] = [];
-    await processWithConcurrency(questions, 10, async (q, idx) => {
-      try {
-        await createQuestion(req.baseUrl, q, paperInstanceId);
-        imported++;
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : "Unknown";
-        importErrors.push(`Q${q.question_number}: ${msg}`);
-        console.error(`[upload] createQuestion failed for Q${q.question_number}: ${msg}`);
-      }
-    });
+    let importErrors: string[] = [];
+    try {
+      const result = await bulkImportQuestions(req.baseUrl, questions, paperInstanceId);
+      imported = result.imported;
+      importErrors = result.errors || [];
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown";
+      importErrors.push(`Bulk import failed: ${msg}`);
+      console.error(`[upload] bulkImportQuestions failed for "${paperTitle}": ${msg}`);
+    }
 
     console.log(`[upload] Paper "${paperTitle}": ${imported}/${questions.length} questions imported`);
 
