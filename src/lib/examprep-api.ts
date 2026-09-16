@@ -264,10 +264,8 @@ export interface CsvQuestion {
   difficulty?: string;
   marks?: number;
   negative_marks?: number;
-  topic_subject?: string;
-  topic_category?: string;
-  subject_id?: string;
-  topic_id?: string;
+  subject?: string;
+  chapter?: string;
 }
 
 export interface BulkImportResult {
@@ -288,37 +286,6 @@ export async function bulkImportQuestions(
   });
   if (!ok) throw new Error(`Failed to import questions: ${JSON.stringify(data)}`);
   return data as BulkImportResult;
-}
-
-export async function createQuestion(
-  baseUrl: string,
-  question: CsvQuestion,
-  paperInstanceId: string,
-): Promise<string> {
-  await ensureLogin(baseUrl);
-  const body: Record<string, unknown> = {
-    action: "create-question",
-    paper_instance_id: paperInstanceId,
-    question_number: question.question_number,
-    question_text: question.question_text,
-    correct_option: question.correct_option,
-  };
-  if (question.option_a != null) body.option_a = question.option_a;
-  if (question.option_b != null) body.option_b = question.option_b;
-  if (question.option_c != null) body.option_c = question.option_c;
-  if (question.option_d != null) body.option_d = question.option_d;
-  if (question.solution_text) body.solution_text = question.solution_text;
-  if (question.difficulty) body.difficulty = question.difficulty;
-  if (typeof question.marks === "number") body.marks = question.marks;
-  if (typeof question.negative_marks === "number") body.negative_marks = question.negative_marks;
-  if (question.subject_id) body.subject_id = question.subject_id;
-  if (question.topic_id) body.topic_id = question.topic_id;
-  if (question.topic_subject) body.topic_subject = question.topic_subject;
-  if (question.topic_category) body.topic_category = question.topic_category;
-
-  const { ok, data } = await examprepFetch(baseUrl, "/api/admin", body);
-  if (!ok) throw new Error(`Failed to create question: ${JSON.stringify(data)}`);
-  return ((data as Record<string, unknown>)?.question as Record<string, unknown>)?.id as string;
 }
 
 // ── Subject / Chapter / Topic management ───────────────────

@@ -9,15 +9,10 @@ import {
   createPaperType,
   listPaperInstances,
   createPaperInstance,
-  createQuestion,
   bulkImportQuestions,
   mapSuperGroupToCategory,
   assignSessionsAndShifts,
   formatPaperTypeName,
-  listSubjects,
-  createSubject,
-  listChapters,
-  createChapter,
   type CsvQuestion,
   type PaperInput,
 } from "@/lib/examprep-api";
@@ -134,8 +129,8 @@ async function downloadPaperQuestions(
     option_d: row.option_d || null,
     correct_option: row.correct_option || "",
     solution_text: row.solution_text || "",
-    topic_subject: row.topic_subject || "",
-    topic_category: row.topic_category || "",
+    subject: row.topic_subject || undefined,
+    chapter: row.topic_category || undefined,
     difficulty: row.difficulty || undefined,
     marks: typeof row.marks === "number" ? row.marks : undefined,
     negative_marks: typeof row.negative_marks === "number" ? row.negative_marks : undefined,
@@ -519,72 +514,9 @@ async function handleUploadPaper(req: UploadPaperRequest) {
   try {
     await loginExamprep(req.baseUrl);
 
-    if (examId) {
-      console.log(`[upload] Resolving subjects/chapters/topics for examId=${examId}, paper="${paperTitle}"`);
-      // ── Resolve subjects, chapters, and topics ──────────────
-      const subjectCache = new Map<string, string>(); // name → id
-      const chapterCache = new Map<string, string>(); // "subjectId::chapterName" → id
-
-      // Fetch existing subjects for this exam once
-      let existingSubjects = await listSubjects(req.baseUrl, examId);
-      for (const s of existingSubjects) {
-        subjectCache.set(s.name.toLowerCase(), s.id);
-      }
-
-      for (const q of questions) {
-        const subjectName = q.topic_subject?.trim();
-        const categoryName = q.topic_category?.trim();
-
-        if (!subjectName) continue;
-
-        // 1. Ensure subject exists
-        let subjectId = subjectCache.get(subjectName.toLowerCase());
-        if (!subjectId) {
-          const newSubject = await createSubject(req.baseUrl, subjectName, examId);
-          subjectId = newSubject.id;
-          subjectCache.set(subjectName.toLowerCase(), subjectId);
-        }
-        q.subject_id = subjectId;
-
-        if (!categoryName) continue;
-
-        // 2. Ensure chapter exists under subject
-        const chapterKey = `${subjectId}::${categoryName.toLowerCase()}`;
-        let chapterId = chapterCache.get(chapterKey);
-        if (!chapterId) {
-          // Fetch chapters for this subject (cache on first access)
-          if (!chapterCache.has(`__fetched__${subjectId}`)) {
-            try {
-              const existingChapters = await listChapters(req.baseUrl, subjectId);
-              for (const c of existingChapters) {
-                chapterCache.set(`${subjectId}::${c.name.toLowerCase()}`, c.id);
-              }
-            } catch {
-              // list may fail for new subjects, that's ok
-            }
-            chapterCache.set(`__fetched__${subjectId}`, "1");
-          }
-          chapterId = chapterCache.get(chapterKey);
-        }
-        if (!chapterId) {
-          try {
-            const newChapter = await createChapter(req.baseUrl, categoryName, subjectId);
-            chapterId = newChapter.id;
-            chapterCache.set(chapterKey, chapterId);
-            console.log(`[upload] Chapter created: name="${newChapter.name}", id="${chapterId}"`);
-          } catch (chapterErr) {
-            console.error(`[upload] createChapter FAILED: name="${categoryName}", subjectId="${subjectId}", error="${chapterErr instanceof Error ? chapterErr.message : chapterErr}"`);
-            continue;
-          }
-        }
-
-      }
-      console.log(`[upload] Resolution complete for "${paperTitle}": ${subjectCache.size} subjects, ${chapterCache.size - [...chapterCache.keys()].filter(k => k.startsWith('__fetched__')).length} chapters`);
-    } else {
-      console.log(`[upload] Skipping subject/chapter resolution — no examId provided for "${paperTitle}"`);
-    }
-
     // ── Import questions ──
+    // Subject/chapter mapping is resolved server-side by examprep's
+    // bulk-import-questions action from each row's `subject` and `chapter`.
     let imported = 0;
     let importErrors: string[] = [];
     try {
