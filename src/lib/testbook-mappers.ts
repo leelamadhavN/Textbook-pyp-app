@@ -1002,6 +1002,9 @@ export function mapExportRows(
     const questions = (section.questions ?? []) as AnyObject[];
     if (!Array.isArray(questions)) continue;
 
+    let lastSubject = "";
+    let lastCategory = "";
+
     for (const question of questions) {
       const en = (question.en ?? {}) as AnyObject;
       const options = findOptionsArray(question, en);
@@ -1034,8 +1037,21 @@ export function mapExportRows(
         null;
 
       const questionTopic = extractTopicInfo(question);
-      const topicSubject = answerInfo?.topicSubject || questionTopic.topicSubject;
-      const topicCategory = answerInfo?.topicCategory || questionTopic.topicCategory;
+      let topicSubject = answerInfo?.topicSubject || questionTopic.topicSubject;
+      let topicCategory = answerInfo?.topicCategory || questionTopic.topicCategory;
+
+      // Fallback: linked/comprehension sub-questions (e.g. GATE linked-answer
+      // questions) often carry no globalConcept tag, so they'd be exported
+      // without a subject/chapter and land in "uncategorized". Inherit the
+      // most recent subject/chapter seen in the same section instead.
+      if (!topicSubject && lastSubject) {
+        topicSubject = lastSubject;
+        topicCategory = lastCategory;
+      }
+      if (topicSubject) {
+        lastSubject = topicSubject;
+        lastCategory = topicCategory;
+      }
 
       rows.push({
         question_number: index,
