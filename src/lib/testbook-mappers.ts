@@ -213,6 +213,13 @@ function stripDisallowedTags(input: string): string {
  *   - \begin{array}{*{20}{c}}     →  \begin{array}{cccc...}
  *   - \log_{10}^\;{...}           →  \log_{10}^{...}
  */
+const BIG_OPERATORS = new Set([
+  "sum", "prod", "coprod", "int", "iint", "iiint", "iiiint", "smallint",
+  "oint", "oiint", "lim", "limsup", "liminf", "inf", "sup", "min", "max",
+  "bigcup", "bigcap", "bigsqcup", "biguplus", "bigvee", "bigwedge",
+  "bigoplus", "bigotimes", "bigodot", "mathop",
+]);
+
 function normalizeLatexForKatex(latex: string): string {
   return latex
     // \mathop <cmd> → <cmd> (KaTeX errors on \mathop \sum)
@@ -226,7 +233,27 @@ function normalizeLatexForKatex(latex: string): string {
     // Expand MathJax column spec *{n}{cols} → cols repeated (KaTeX lacks *)
     .replace(/\*\{(\d{1,2})\}\{([^{}]*)\}/g, (_match, n: string, cols: string) =>
       String(cols).repeat(Math.max(1, Math.min(30, parseInt(n, 10)))),
-    );
+    )
+    // Expand corrupted MathJax column spec {n {cols*}} → cols repeated
+    .replace(/(\d{1,2})\s*\{\s*([^{}]+?)\*\}/g, (_match, n: string, cols: string) =>
+      String(cols).repeat(Math.max(1, Math.min(30, parseInt(n, 10)))),
+    )
+    // Unicode combining hat (U+0302) from lost "\hat i" → \hat{i}
+    .replace(/([a-zA-Z])\u0302/g, "\\hat{$1}")
+    .replace(/\u0302\s*([a-zA-Z])/g, "\\hat{$1}")
+    .replace(/\u0302/g, "")
+    // Strip zero-width / invisible characters KaTeX has no metrics for
+    .replace(/[\u200B\u200C\u200D\uFEFF]/g, "")
+    // Brace \left...\right when used as a ^/_ argument
+    .replace(/([\^_])\\left([([|.])([\s\S]*?)\\right([)\]|.])/g, "$1{\\left$2$3\\right$4}")
+    // Strip orphaned \limits / \nolimits not following a big operator
+    .replace(/(\\[a-zA-Z]+)\s*\\(?:limits|nolimits)/g, (_match, cmd: string) =>
+      BIG_OPERATORS.has(cmd.slice(1)) ? _match : cmd,
+    )
+    // Remove dangling ^ / _ with no following argument (e.g. "{δ _}")
+    .replace(/([\^_])\s*(?=[}\\]|$)/g, "")
+    // Remove stray trailing backslashes (e.g. "10∠ 0^\circ\")
+    .replace(/\\+(?=\s*$)/g, "");
 }
 
 /**
