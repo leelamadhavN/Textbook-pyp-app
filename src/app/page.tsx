@@ -787,7 +787,11 @@ export default function Home() {
         errorList,
       });
 
-      // Step 5: upload each paper sequentially
+      // Step 5: upload each paper sequentially.
+      // Conservative throttle to avoid Testbook rate limiting / blacklisting:
+      // ~50s delay between papers (≈1 min per paper including download/upload),
+      // so ~130 papers finish in ~130–150 min. Backs off further on a 429.
+      let paperDelay = 50000;
       for (const pt of progressPTs) {
         for (let i = 0; i < pt.instances.length; i++) {
           const inst = pt.instances[i];
@@ -833,8 +837,12 @@ export default function Home() {
               inst.uploadStatus = "success";
               inst.questionCount = uploadData.questionCount;
               inst.imported = uploadData.imported;
+              paperDelay = Math.max(50000, Math.floor(paperDelay * 0.7));
               updateProgress({ uploadedCount: getUploadedCount(progressPTs) });
             } else {
+              if (/429|rate limit/i.test(uploadData.message ?? "")) {
+                paperDelay = Math.min(120000, paperDelay * 2);
+              }
               inst.uploadStatus = "failed";
               inst.uploadError = uploadData.message ?? "Upload failed";
               errorList.push(
@@ -860,8 +868,9 @@ export default function Home() {
 
           updateProgress({ paperTypes: [...progressPTs] });
 
+          // Throttle between papers (adaptive — grows on HTTP 429 rate limits).
           if (i < pt.instances.length - 1) {
-            await new Promise<void>((resolve) => setTimeout(resolve, 500));
+            await new Promise<void>((resolve) => setTimeout(resolve, paperDelay));
           }
         }
       }

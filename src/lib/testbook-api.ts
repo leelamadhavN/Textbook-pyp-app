@@ -57,6 +57,8 @@ type ApiResult = {
   body: unknown;
 };
 
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
 async function fetchJson(url: string): Promise<ApiResult> {
   const response = await fetch(url, {
     method: "GET",
@@ -152,6 +154,13 @@ export async function getQuestionPaperRaw(paperId: string, authCode: string) {
     if (result.success) {
       return result;
     }
+
+    // Backoff between retries — avoids hammering the API and gives rate-limit
+    // / transient failures time to clear. Longer wait for 429 rate limits.
+    if (i < attempts - 1) {
+      const delay = result.status === 429 ? 2000 * (i + 1) : 750 * (i + 1);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
   }
 
   return (
@@ -186,17 +195,23 @@ export async function initTestAttempt(paperId: string, authCode: string): Promis
     { method: "GET", cache: "no-store" },
   ).catch(() => null);
 
+  await sleep(400);
+
   // Step 2: mark as serving
   await fetch(
     `${stateBase}?${new URLSearchParams({ ...sharedState, beforeServe: "false", random: String(Math.random()) }).toString()}`,
     { method: "GET", cache: "no-store" },
   ).catch(() => null);
 
+  await sleep(400);
+
   // Step 3: re-check state with attemptNo=1 (as the browser does after navigation)
   await fetch(
     `${stateBase}?${new URLSearchParams({ ...sharedState, beforeServe: "true", attemptNo: "1", random: String(Math.random()) }).toString()}`,
     { method: "GET", cache: "no-store" },
   ).catch(() => null);
+
+  await sleep(400);
 
   // Step 4: call analysis endpoint — this is what the browser loads on the results page
   //         and appears to be required for /answers?attemptNo=1 to return data
@@ -233,6 +248,13 @@ export async function getQuestionAnswersRaw(paperId: string, authCode: string) {
 
     if (result.success) {
       return result;
+    }
+
+    // Backoff between retries — avoids hammering the API and gives rate-limit
+    // / transient failures time to clear. Longer wait for 429 rate limits.
+    if (i < attempts - 1) {
+      const delay = result.status === 429 ? 2000 * (i + 1) : 750 * (i + 1);
+      await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
 

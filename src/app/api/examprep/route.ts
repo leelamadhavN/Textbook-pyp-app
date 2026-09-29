@@ -74,10 +74,31 @@ type ExamPrepRequest =
 
 // ─── Helpers ────────────────────────────────────────────────
 
-function getErrorMessage(details: unknown): string {
-  if (!details || typeof details !== "object") return "Failed";
+function getErrorMessage(details: unknown, status?: number): string {
+  if (!details || typeof details !== "object") {
+    return status ? `Testbook request failed (HTTP ${status})` : "Failed";
+  }
   const typed = details as Record<string, unknown>;
-  return (typed.message as string) || (typed.error as string) || "Failed";
+  const message = typeof typed.message === "string" ? typed.message.trim() : "";
+  const error = typeof typed.error === "string" ? typed.error.trim() : "";
+  if (message) return message;
+  if (error) return error;
+
+  // Testbook returns {"success":false} with no message for auth / rate-limit
+  // failures — surface a meaningful reason instead of the generic "Failed".
+  if (typed.success === false) {
+    if (status === 401) {
+      return "Testbook rejected the request (HTTP 401): auth_code is expired or invalid. Refresh your auth token.";
+    }
+    if (status === 429) {
+      return "Testbook rate limit exceeded (HTTP 429): too many requests. Slow down and retry.";
+    }
+    return status
+      ? `Testbook rejected the request (HTTP ${status})`
+      : "Testbook rejected the request";
+  }
+
+  return "Failed";
 }
 
 async function downloadPaperQuestions(
@@ -93,7 +114,15 @@ async function downloadPaperQuestions(
 
   const result = await getQuestionPaperRaw(paperId, authCode);
   if (!result.success) {
-    const errorMsg = getErrorMessage(result.body);
+    const errorMsg = getErrorMessage(result.body, result.status);
+
+    // Fail fast with a clear message when the auth_code is no longer accepted.
+    if (result.status === 401) {
+      throw new Error(
+        "Testbook auth failed (HTTP 401). Your auth_code is expired or was revoked — refresh it in the Auth Token panel and retry.",
+      );
+    }
+
     if (errorMsg.includes("redis") || errorMsg.includes("Test in Redis") || errorMsg.includes("fetch question paper")) {
       console.warn(`[upload] Skipping paper ${paperId} due to Testbook backend error (likely subjective or missing): ${errorMsg}`);
       return [];
