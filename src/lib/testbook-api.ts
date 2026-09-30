@@ -59,10 +59,10 @@ type ApiResult = {
 
 class RateLimiter {
   private lastRequestTime = 0;
-  private readonly delayMs = 1000; // 1 request per second (increased for safety)
+  private readonly delayMs = 2000; // 1 request every 2 seconds (very safe)
   private queue: (() => void)[] = [];
   private active = 0;
-  private readonly maxConcurrent = 2; // Reduced concurrency to avoid 429 errors
+  private readonly maxConcurrent = 1; // Strictly one request at a time
 
   async acquire(): Promise<void> {
     return new Promise<void>((resolve) => {
