@@ -57,10 +57,65 @@ type ApiResult = {
   body: unknown;
 };
 
+class RateLimiter {
+  private lastRequestTime = 0;
+  private readonly delayMs = 1000; // 1 request per second (increased for safety)
+  private queue: (() => void)[] = [];
+  private active = 0;
+  private readonly maxConcurrent = 2; // Reduced concurrency to avoid 429 errors
+
+  async acquire(): Promise<void> {
+    return new Promise<void>((resolve) => {
+      this.queue.push(resolve);
+      this.processQueue();
+    });
+  }
+
+  private processQueue() {
+    if (this.active >= this.maxConcurrent || this.queue.length === 0) {
+      return;
+    }
+
+    const now = Date.now();
+    const timeSinceLast = now - this.lastRequestTime;
+    
+    if (timeSinceLast < this.delayMs) {
+      setTimeout(() => this.processQueue(), this.delayMs - timeSinceLast);
+      return;
+    }
+
+    this.lastRequestTime = Date.now();
+    this.active++;
+    
+    const resolve = this.queue.shift();
+    if (resolve) resolve();
+    
+    if (this.queue.length > 0) {
+      setTimeout(() => this.processQueue(), this.delayMs);
+    }
+  }
+
+  release(): void {
+    this.active--;
+    this.processQueue();
+  }
+}
+
+const apiRateLimiter = new RateLimiter();
+
+async function rateLimitedFetch(url: string, init?: RequestInit): Promise<Response> {
+  await apiRateLimiter.acquire();
+  try {
+    return await fetch(url, init);
+  } finally {
+    apiRateLimiter.release();
+  }
+}
+
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 async function fetchJson(url: string): Promise<ApiResult> {
-  const response = await fetch(url, {
+  const response = await rateLimitedFetch(url, {
     method: "GET",
     cache: "no-store",
     headers: {
@@ -190,7 +245,7 @@ export async function initTestAttempt(paperId: string, authCode: string): Promis
   };
 
   // Step 1: create attempt (beforeServe=true, no attemptNo)
-  await fetch(
+  await rateLimitedFetch(
     `${stateBase}?${new URLSearchParams({ ...sharedState, beforeServe: "true", random: String(Math.random()) }).toString()}`,
     { method: "GET", cache: "no-store" },
   ).catch(() => null);
@@ -198,7 +253,7 @@ export async function initTestAttempt(paperId: string, authCode: string): Promis
   await sleep(400);
 
   // Step 2: mark as serving
-  await fetch(
+  await rateLimitedFetch(
     `${stateBase}?${new URLSearchParams({ ...sharedState, beforeServe: "false", random: String(Math.random()) }).toString()}`,
     { method: "GET", cache: "no-store" },
   ).catch(() => null);
@@ -206,7 +261,7 @@ export async function initTestAttempt(paperId: string, authCode: string): Promis
   await sleep(400);
 
   // Step 3: re-check state with attemptNo=1 (as the browser does after navigation)
-  await fetch(
+  await rateLimitedFetch(
     `${stateBase}?${new URLSearchParams({ ...sharedState, beforeServe: "true", attemptNo: "1", random: String(Math.random()) }).toString()}`,
     { method: "GET", cache: "no-store" },
   ).catch(() => null);
@@ -222,7 +277,7 @@ export async function initTestAttempt(paperId: string, authCode: string): Promis
     attemptNo: "1",
     requiredStateExamCutoffs: "true",
   });
-  await fetch(
+  await rateLimitedFetch(
     `https://api-new.testbook.com/api/v2.2/tests/${encodedId}/analysis?${analysisParams.toString()}`,
     { method: "GET", cache: "no-store" },
   ).catch(() => null);
