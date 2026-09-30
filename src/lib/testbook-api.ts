@@ -193,7 +193,7 @@ export async function getQuestionPaperRaw(paperId: string, authCode: string) {
   const encodedId = encodeURIComponent(paperId);
   const params = new URLSearchParams({
     auth_code: authCode,
-    "X-Tb-Client": "web,1.3",
+    "X-Tb-Client": "web,1.4",
     language: "English",
   });
 
@@ -238,7 +238,7 @@ export async function initTestAttempt(paperId: string, authCode: string): Promis
   const stateBase = `https://api-new.testbook.com/api/v2/tests/${encodedId}/state`;
   const sharedState = {
     auth_code: authCode,
-    "X-Tb-Client": "web,1.3",
+    "X-Tb-Client": "web,1.4",
     language: "English",
     client: "web",
     testLang: "en",
@@ -272,7 +272,7 @@ export async function initTestAttempt(paperId: string, authCode: string): Promis
   //         and appears to be required for /answers?attemptNo=1 to return data
   const analysisParams = new URLSearchParams({
     auth_code: authCode,
-    "X-Tb-Client": "web,1.3",
+    "X-Tb-Client": "web,1.4",
     language: "English",
     attemptNo: "1",
     requiredStateExamCutoffs: "true",
@@ -287,7 +287,7 @@ export async function getQuestionAnswersRaw(paperId: string, authCode: string) {
   const encodedId = encodeURIComponent(paperId);
   const params = new URLSearchParams({
     auth_code: authCode,
-    "X-Tb-Client": "web,1.3",
+    "X-Tb-Client": "web,1.4",
     language: "English",
     attemptNo: "1",
   });
